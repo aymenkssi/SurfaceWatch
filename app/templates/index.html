@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SurfaceWatch</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 760px; margin: 2rem auto; padding: 0 1rem; color: #1f2328; }
+    code { background: #f3f4f6; padding: .1rem .3rem; border-radius: 4px; word-break: break-all; }
+    .card { border: 1px solid #d0d7de; border-radius: 8px; padding: 1rem; margin: 1rem 0; }
+    .ok { color: #1a7f37; } .pending { color: #9a6700; }
+    small { color: #57606a; }
+  </style>
+</head>
+<body>
+  <h1>SurfaceWatch</h1>
+  <p>Scan gratuit de votre surface d'attaque externe. <small>(v0.1 — prototype)</small></p>
+
+  <form method="post" action="/domains" class="card">
+    <label>Ajouter un domaine <input name="domain" placeholder="exemple.fr" required></label>
+    <button type="submit">Ajouter</button>
+  </form>
+
+  {% for name, entry in domains.items() %}
+  <div class="card">
+    <strong>{{ name }}</strong>
+    {% if entry.verified %}<span class="ok">✔ vérifié</span>{% else %}<span class="pending">en attente de vérification</span>{% endif %}
+    {% if not entry.verified %}
+    <p>Créez cet enregistrement DNS :</p>
+    <p><code>{{ entry.challenge.record_name }}</code> TXT <code>"{{ entry.challenge.record_value }}"</code></p>
+    <small>Expire le {{ entry.challenge.expires_at.strftime('%d/%m/%Y %H:%M') }} UTC</small>
+    {% endif %}
+  </div>
+  {% endfor %}
+
+  <p><small>Un scan actif n'est possible que sur un domaine dont vous avez prouvé la propriété.</small></p>
+</body>
+</html>
