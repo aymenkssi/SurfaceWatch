@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Rapport EASM — {{ report.domain }}</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 2rem; color: #1f2328; }
+    h1 { margin-bottom: 0; } .meta { color: #57606a; margin-top: .25rem; }
+    .kpis { display: flex; gap: 1rem; margin: 1.5rem 0; }
+    .kpi { border: 1px solid #d0d7de; border-radius: 8px; padding: .75rem 1rem; min-width: 120px; }
+    .kpi b { display: block; font-size: 1.6rem; }
+    table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
+    th, td { border-bottom: 1px solid #d0d7de; padding: .4rem; text-align: left; font-size: .9rem; }
+    .sev-CRITICAL, .sev-HIGH { color: #cf222e; font-weight: 600; }
+    .sev-MEDIUM { color: #9a6700; font-weight: 600; }
+    .note { font-size: .85rem; color: #57606a; border-top: 1px solid #d0d7de; padding-top: 1rem; }
+  </style>
+</head>
+<body>
+  <h1>Rapport de surface d'attaque externe</h1>
+  <p class="meta">{{ report.domain }} · niveau {{ report.level }} · {{ report.generated_at.strftime('%d/%m/%Y %H:%M') }} UTC</p>
+
+  <div class="kpis">
+    <div class="kpi"><b>{{ report.subdomains|length }}</b>sous-domaines</div>
+    <div class="kpi"><b>{{ report.ip_count }}</b>adresses IP</div>
+    <div class="kpi"><b>{{ report.urls|length }}</b>URL</div>
+    <div class="kpi"><b>{{ report.findings|length }}</b>findings</div>
+  </div>
+
+  <h2>Findings</h2>
+  {% if report.findings %}
+  <table>
+    <tr><th>Sévérité</th><th>Hôte</th><th>Description</th></tr>
+    {% for f in report.findings %}
+    <tr><td class="sev-{{ f.severity }}">{{ f.severity }}</td><td>{{ f.host }}</td><td>{{ f.description }}</td></tr>
+    {% endfor %}
+  </table>
+  {% else %}<p>Aucun finding sur ce scan.</p>{% endif %}
+
+  <h2>Sous-domaines découverts</h2>
+  <table>
+    <tr><th>Hôte</th><th>IP</th></tr>
+    {% for host, ips in report.subdomains.items() %}
+    <tr><td>{{ host }}</td><td>{{ ips|sort|join(', ') }}</td></tr>
+    {% endfor %}
+  </table>
+
+  <p class="note">
+    {% if report.level == 'passive' %}Scan passif : données issues de sources publiques uniquement, aucune requête n'a été envoyée vers vos systèmes.{% endif %}
+    Ce rapport est un instantané et peut être incomplet. Généré par SurfaceWatch (open source, AGPL-3.0), basé sur BBOT.
+  </p>
+</body>
+</html>
