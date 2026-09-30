@@ -62,6 +62,24 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
     )
 
 
+def report_to_dict(report: Report) -> dict:
+    """JSON-friendly view of a report, consumed by the React front end."""
+    return {
+        "domain": report.domain,
+        "level": report.level,
+        "generated_at": report.generated_at.isoformat(),
+        "summary": {
+            "subdomains": len(report.subdomains),
+            "ips": report.ip_count,
+            "urls": len(report.urls),
+            "findings": len(report.findings),
+        },
+        "subdomains": [{"host": h, "ips": sorted(ips)} for h, ips in report.subdomains.items()],
+        "urls": sorted(report.urls),
+        "findings": report.findings,
+    }
+
+
 def render_html(report: Report) -> str:
     return _env.get_template("report.html").render(report=report)
 
