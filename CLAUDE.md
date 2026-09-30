@@ -74,9 +74,12 @@ docker compose up --build              # tout le stack
 ```
 
 ## Points à vérifier
-- **BBOT 3.0 a changé la CLI** par rapport à la 2.x. Les options utilisées dans `app/scans.py`
-  (`-rf passive`, `-om json`, `-o`, `-n`, `-y`) et l'emplacement du fichier JSON de sortie
-  doivent être revérifiés contre la doc officielle 3.x avant la première exécution réelle.
+- Options BBOT de `app/scans.py` vérifiées contre les sources de BBOT 3.0.2 (sept. 2026).
+  Le niveau `standard` exclut les flags `loud`, `invasive`, `iis-shortnames` et `web-heavy`
+  (sinon `-p web` active `iis_shortnames`, `webbrute_shortnames` et `dnsbrute`).
+  Revérifier à chaque montée de version de BBOT.
+- Le dossier de sortie BBOT d'un scan est supprimé dès que ses événements sont en base
+  (rétention gérée par l'app, pas par `keep_scans`, qui ne concerne que `~/.bbot/scans`).
 - Tester d'abord BBOT sur un domaine qu'on possède, jamais sur un domaine tiers.
 
 ## Conventions

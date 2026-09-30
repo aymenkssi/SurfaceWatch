@@ -41,4 +41,37 @@ def test_active_scan_requires_verification():
 def test_levels_never_use_aggressive_presets():
     forbidden = {"kitchen-sink", "web-heavy", "webbrute", "paramminer"}
     for args in LEVEL_ARGS.values():
-        assert not forbidden & set(args)
+        start = args.index("-p") + 1
+        end = next((i for i in range(start, len(args)) if args[i].startswith("-")), len(args))
+        assert not forbidden & set(args[start:end])
+
+
+def test_standard_level_excludes_loud_modules():
+    args = LEVEL_ARGS[ScanLevel.STANDARD]
+    excluded = set(args[args.index("-ef") + 1:])
+    assert {"loud", "invasive", "iis-shortnames", "web-heavy"} <= excluded
+
+
+def test_run_scan_reads_events_then_deletes_bbot_output(tmp_path, monkeypatch):
+    """Fake BBOT binary: no network, just writes an NDJSON file where BBOT would."""
+    from app import scans
+    from app.config import get_settings
+
+    fake = tmp_path / "fake-bbot"
+    fake.write_text(
+        "#!/usr/bin/env python3\n"
+        "import json, sys, pathlib\n"
+        "a = sys.argv\n"
+        "d = pathlib.Path(a[a.index('-o') + 1]) / a[a.index('-n') + 1]\n"
+        "d.mkdir(parents=True)\n"
+        "(d / 'output.json').write_text(json.dumps({'type': 'DNS_NAME', 'data': 'www.example.fr'}) + '\\n')\n"
+    )
+    fake.chmod(0o755)
+    settings = get_settings()
+    monkeypatch.setattr(settings, "bbot_bin", str(fake))
+    monkeypatch.setattr(settings, "scans_dir", tmp_path / "scans")
+
+    result = scans.run_scan("example.fr", "passive", domain_verified=False)
+    assert result.returncode == 0
+    assert result.events == [{"type": "DNS_NAME", "data": "www.example.fr"}]
+    assert list((tmp_path / "scans").iterdir()) == []
