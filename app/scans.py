@@ -3,13 +3,14 @@
 BBOT is deliberately invoked through its CLI (not imported) — see CLAUDE.md (licence).
 Users never pass BBOT options: they pick a level, mapped here to a fixed argument list.
 
-TODO(bbot-3.x): verify flags (-rf, -om, -o, -n, -y) and the JSON output path against the
-official BBOT 3.x docs before the first real run — the CLI changed between 2.x and 3.0.
+CLI flags and the output path were checked against the BBOT 3.0.2 source
+(bbot/scanner/preset/args.py): JSON events land in <output_dir>/<scan name>/output.json.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass, field
@@ -26,10 +27,21 @@ class ScanLevel(str, Enum):
 
 
 # Server-side presets. NEVER build these from user input.
+# The "web" preset includes "iis-shortnames" (detect_only: false), which pulls loud brute-force
+# modules such as webbrute_shortnames: exclude those flags so "standard" stays light.
+FORBIDDEN_FLAGS = ["loud", "invasive", "iis-shortnames", "web-heavy"]
+# GDPR (no email-enum): drop the email-harvesting module that subdomain-enum pulls in. Other
+# modules flagged email-enum (sslcert, dnscaa, dnstlsrpt) are kept for their DNS results; the
+# e-mail addresses they emit are discarded in load_events().
+EXCLUDED_MODULES = ["hunterio"]
 LEVEL_ARGS: dict[ScanLevel, list[str]] = {
-    ScanLevel.PASSIVE: ["-p", "subdomain-enum", "-rf", "passive"],
-    ScanLevel.STANDARD: ["-p", "subdomain-enum", "web"],
+    ScanLevel.PASSIVE: ["-p", "subdomain-enum", "-rf", "passive", "-em", *EXCLUDED_MODULES],
+    ScanLevel.STANDARD: ["-p", "subdomain-enum", "web", "-ef", *FORBIDDEN_FLAGS,
+                         "-em", *EXCLUDED_MODULES],
 }
+
+# Personal data BBOT may emit: never stored, never shown in reports.
+PERSONAL_DATA_EVENTS = {"EMAIL_ADDRESS", "USERNAME", "PASSWORD", "HASHED_PASSWORD"}
 
 
 class ScanNotAllowed(PermissionError):
@@ -53,6 +65,7 @@ def build_command(domain: str, level: ScanLevel, scan_id: str, output_dir: Path)
         "-t", domain,
         *LEVEL_ARGS[level],
         "-om", "json",
+        "-eom", "csv", "txt",  # only the JSON output is used
         "-o", str(output_dir),
         "-n", scan_id,
         "-y",  # non-interactive
@@ -78,17 +91,23 @@ def run_scan(raw_domain: str, level: str, domain_verified: bool) -> ScanResult:
             cmd, capture_output=True, text=True, timeout=settings.scan_timeout_seconds, check=False
         )
     except subprocess.TimeoutExpired:
+        shutil.rmtree(output_dir / scan_id, ignore_errors=True)
         return ScanResult(scan_id, domain, level, returncode=-1, error="timeout")
     except FileNotFoundError:
         return ScanResult(scan_id, domain, level, returncode=-1, error="bbot binary not found")
 
-    events = load_events(output_dir / scan_id / "output.json")
+    scan_dir = output_dir / scan_id
+    try:
+        events = load_events(scan_dir / "output.json")
+    finally:
+        # Events are stored in the DB (and purged after RETENTION_DAYS); never keep a second copy.
+        shutil.rmtree(scan_dir, ignore_errors=True)
     error = None if proc.returncode == 0 else proc.stderr[-2000:]
     return ScanResult(scan_id, domain, level, proc.returncode, events, error)
 
 
 def load_events(path: Path) -> list[dict]:
-    """BBOT JSON output is one JSON event per line (NDJSON)."""
+    """BBOT JSON output is one JSON event per line (NDJSON). Personal data events are dropped."""
     if not path.exists():
         return []
     events = []
@@ -98,7 +117,9 @@ def load_events(path: Path) -> list[dict]:
             if not line:
                 continue
             try:
-                events.append(json.loads(line))
+                event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(event, dict) and event.get("type") not in PERSONAL_DATA_EVENTS:
+                events.append(event)
     return events
