@@ -14,10 +14,17 @@ Prouver la chaîne complète sur un domaine vérifié :
 6. Il consulte le rapport en HTML et le télécharge en PDF.
 
 ## Niveaux de scan
-| Niveau | Vérification requise | Preset BBOT | Statut |
-|---|---|---|---|
-| `passive` | Non (mais rate limit) | `subdomain-enum` + `-rf passive` | MVP |
-| `standard` | **Oui** | `subdomain-enum` + `web` (léger) | v2 |
+| Niveau | Vérification requise | Consentement | Preset BBOT | Statut |
+|---|---|---|---|---|
+| `passive` | Non (mais rate limit) | Non | `subdomain-enum` + `-rf passive` | MVP |
+| `standard` | **Oui** | Non | `subdomain-enum` + `web` (léger) | v0.3 |
+| `advanced` | **Oui** (revérifiée au lancement) | **Oui** (explicite, journalisé) | `subdomain-enum` + `web` + `-m dnsbrute webbrute` | v0.4 |
+
+Le niveau `advanced` active de la **force brute de surface** (sous-domaines via `dnsbrute`,
+répertoires web via `webbrute`). Il reste sans force brute d'authentification (`legba`,
+`medusa` — flag `invasive`), sans `iis-shortnames`/`web-heavy` ni `paramminer`. Il a son
+propre quota journalier (`ADVANCED_MAX_SCANS_PER_DAY`, défaut 1) et son propre timeout
+(`ADVANCED_SCAN_TIMEOUT_SECONDS`, défaut 3600 s), plus stricts que les niveaux inférieurs.
 
 ## Contenu du rapport (MVP)
 - Résumé : nombre de sous-domaines, d'IP, de services web, date du scan
@@ -27,8 +34,10 @@ Prouver la chaîne complète sur un domaine vérifié :
 
 ## Garde-fous
 - 1 scan simultané par utilisateur, N scans par jour (configurable)
-- Timeout dur sur chaque job (`SCAN_TIMEOUT_SECONDS`)
-- Journal d'audit de chaque scan
+- Niveau `advanced` : preuve de propriété revérifiée au lancement, consentement explicite
+  obligatoire et journalisé, quota journalier et timeout dédiés plus stricts
+- Timeout dur sur chaque job (`SCAN_TIMEOUT_SECONDS`, `ADVANCED_SCAN_TIMEOUT_SECONDS`)
+- Journal d'audit de chaque scan (consentement inclus)
 - Purge automatique des résultats après `RETENTION_DAYS`
 
 ## Hors périmètre MVP
@@ -39,7 +48,8 @@ par l'utilisateur, module `email-enum`.
 - **v0.1** — squelette, vérification DNS, scan passif, rapport HTML *(en cours)*
 - **v0.2** — comptes utilisateurs, Postgres, PDF, rate limit, journal d'audit
 - **v0.3** — niveau `standard` (actif) pour domaines vérifiés, purge automatique
-- **v0.4** — diff entre deux scans (nouveaux actifs), score de risque
+- **v0.4** — niveau `advanced` (force brute de surface, consentement + quota dédiés) ;
+  diff entre deux scans (nouveaux actifs), score de risque
 - **v0.5** — croisement technos ↔ CISA KEV / NVD (réutiliser VulnWatch-AI)
 - **Plus tard** — scans planifiés, alertes Teams/e-mail, clés API utilisateur
 

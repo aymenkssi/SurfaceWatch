@@ -18,8 +18,18 @@ Ces règles passent avant toute fonctionnalité. Ne jamais les contourner, même
 2. **Mode passif** (sources publiques uniquement, aucun paquet vers la cible) : autorisé sans
    vérification, mais avec rate limit strict.
 3. **Les presets BBOT sont imposés côté serveur.** L'utilisateur choisit un « niveau »
-   (`passive`, `standard`), jamais des modules ou des options BBOT bruts.
-   Jamais de `kitchen-sink`, `web-heavy`, `webbrute`, `paramminer` en production.
+   (`passive`, `standard`, `advanced`), jamais des modules ou des options BBOT bruts.
+   - Le niveau `advanced` **active de la force brute de surface** : `dnsbrute`
+     (sous-domaines) et `webbrute` (répertoires web, liste de 1000 mots). Il n'est
+     autorisé **que** pour un domaine avec preuve de propriété DNS TXT valide
+     (revérifiée au lancement du job) **et** avec un consentement explicite de
+     l'utilisateur, journalisé dans le trail d'audit. Il a son propre quota
+     journalier et son propre timeout, plus stricts.
+   - Même en `advanced`, restent **interdits** : la force brute d'authentification
+     (`legba`, `medusa` — flag `invasive`), `iis-shortnames` / `web-heavy`
+     (`webbrute_shortnames`), le `paramminer` (flag `web-paramminer`), et bien sûr
+     `kitchen-sink`. Le consentement ne débloque jamais de modules bruts choisis
+     par l'utilisateur : le preset reste imposé côté serveur.
 4. **Journalisation obligatoire** de chaque scan : utilisateur, domaine, niveau, IP source, horodatage.
 5. **RGPD** : hébergement UE, rétention courte des résultats (30 jours par défaut),
    suppression à la demande, pas de module `email-enum` dans le MVP.
@@ -77,7 +87,10 @@ docker compose up --build              # tout le stack
 - Options BBOT de `app/scans.py` vérifiées contre les sources de BBOT 3.0.2 (sept. 2026).
   Le niveau `standard` exclut les flags `loud`, `invasive`, `iis-shortnames` et `web-heavy`
   (sinon `-p web` active `iis_shortnames`, `webbrute_shortnames` et `dnsbrute`).
-  Revérifier à chaque montée de version de BBOT.
+  Le niveau `advanced` ajoute explicitement `-m dnsbrute webbrute` et exclut les flags
+  `invasive`, `iis-shortnames`, `web-heavy`, `web-paramminer` (résolu vérifié sur BBOT 3.0.2 :
+  modules chargés = `dnsbrute`, `webbrute` uniquement côté brute-force ; `legba`, `medusa`,
+  `webbrute_shortnames`, `paramminer_*` bien exclus). Revérifier à chaque montée de version de BBOT.
 - Le dossier de sortie BBOT d'un scan est supprimé dès que ses événements sont en base
   (rétention gérée par l'app, pas par `keep_scans`, qui ne concerne que `~/.bbot/scans`).
 - Tester d'abord BBOT sur un domaine qu'on possède, jamais sur un domaine tiers.
