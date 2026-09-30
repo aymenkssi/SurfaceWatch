@@ -3,7 +3,7 @@
 Service web gratuit de scan EASM (surface d'attaque externe) avec génération de rapports,
 basé sur [BBOT](https://github.com/blacklanternsecurity/bbot). *Nom provisoire.*
 
-**Statut : v0.1 — squelette.** Voir [`docs/SPEC.md`](docs/SPEC.md) pour la spec et la roadmap,
+**Statut : v0.2 — application web (front React + API).** Voir [`docs/SPEC.md`](docs/SPEC.md) pour la spec et la roadmap,
 et [`CLAUDE.md`](CLAUDE.md) pour les règles du projet.
 
 ## Démarrage rapide
@@ -18,8 +18,16 @@ En local sans Docker :
 python -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
-uvicorn app.main:app --reload
+uvicorn app.main:app --reload          # API sur :8000
+rq worker scans                         # worker (nécessite Redis)
+
+cd frontend && npm install && npm run dev   # front sur http://localhost:5173
 ```
+
+## Architecture
+- **Front** : React 19 + Tailwind + shadcn/ui (même stack que Waselni_V2.0), build Vite.
+- **Back** : FastAPI (API JSON `/api`, JWT), SQLAlchemy, worker RQ qui lance BBOT en sous-processus.
+- En production, FastAPI sert aussi le build React (`frontend/dist`) : une seule origine.
 
 ## Principe de sécurité
 Aucun scan actif sans preuve de propriété du domaine (enregistrement DNS TXT).

@@ -35,7 +35,10 @@ Ces règles passent avant toute fonctionnalité. Ne jamais les contourner, même
 - Ne pas utiliser « BBOT » dans le nom ou la marque du service.
 
 ## Stack
-- **Python 3.11+**, **FastAPI** + templates Jinja2 (HTMX plus tard si besoin)
+- **Back** : **Python 3.11+**, **FastAPI** (API JSON sous `/api`, auth JWT bearer + bcrypt)
+- **Front** : **React 19** (JavaScript) + **Tailwind CSS** + composants **shadcn/ui** (Radix),
+  axios, react-router, lucide-react, sonner — même stack que Waselni_V2.0, mais build **Vite**
+  (au lieu de CRA/craco). Jinja2 ne sert plus qu'au template du rapport HTML/PDF.
 - **Redis + RQ** pour la file de jobs (1 scan = 1 job, timeout, 1 scan simultané par utilisateur)
 - **PostgreSQL** (SQLite acceptable en dev) — SQLAlchemy
 - **BBOT 3.x** installé dans l'image du worker (`pipx install bbot`)
@@ -45,12 +48,17 @@ Ces règles passent avant toute fonctionnalité. Ne jamais les contourner, même
 ## Arborescence
 ```
 app/
-  main.py        # routes FastAPI
+  main.py        # app FastAPI : monte /api et sert le build React (frontend/dist)
+  api.py         # routes JSON : auth, domaines, scans, rapports
+  auth.py        # bcrypt + JWT
+  db.py / models.py  # SQLAlchemy : User, Domain, Scan, AuditLog
+  worker.py      # jobs RQ : execute_scan, purge_expired
   config.py      # settings (pydantic-settings, variables d'env)
   domains.py     # normalisation de domaine, jetons, vérification DNS TXT
   scans.py       # lancement BBOT en sous-processus + parsing JSON
   reports.py     # agrégation des événements + rendu HTML/PDF
-  templates/     # pages web + template de rapport
+  templates/     # template du rapport (HTML/PDF)
+frontend/        # React + Vite + Tailwind + shadcn/ui
 tests/
 docs/SPEC.md     # spec du MVP + roadmap
 ```
@@ -58,7 +66,8 @@ docs/SPEC.md     # spec du MVP + roadmap
 ## Commandes
 ```bash
 pip install -e ".[dev]"
-uvicorn app.main:app --reload         # web en local
+uvicorn app.main:app --reload         # API en local (:8000)
+cd frontend && npm install && npm run dev   # front en local (:5173, proxy /api → :8000)
 rq worker scans                        # worker (nécessite Redis)
 pytest                                 # tests
 docker compose up --build              # tout le stack

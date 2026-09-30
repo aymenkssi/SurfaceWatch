@@ -1,3 +1,12 @@
+# --- Front end: React (Vite) build ---------------------------------------------------------
+FROM node:22-alpine AS frontend
+WORKDIR /frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci --no-audit --no-fund
+COPY frontend/ ./
+RUN npm run build
+
+# --- Back end: FastAPI + RQ worker (BBOT runs here as a CLI subprocess) --------------------
 FROM python:3.11-slim
 
 # WeasyPrint system libraries (PDF export)
@@ -9,6 +18,7 @@ WORKDIR /srv
 COPY pyproject.toml ./
 COPY app ./app
 RUN pip install --no-cache-dir -e ".[pdf]" && pip install --no-cache-dir bbot
+COPY --from=frontend /frontend/dist ./frontend/dist
 
 # Run as non-root
 RUN useradd -m sw && mkdir -p /srv/data && chown -R sw /srv
