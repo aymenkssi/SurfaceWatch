@@ -30,10 +30,18 @@ class ScanLevel(str, Enum):
 # The "web" preset includes "iis-shortnames" (detect_only: false), which pulls loud brute-force
 # modules such as webbrute_shortnames: exclude those flags so "standard" stays light.
 FORBIDDEN_FLAGS = ["loud", "invasive", "iis-shortnames", "web-heavy"]
+# GDPR (no email-enum): drop the email-harvesting module that subdomain-enum pulls in. Other
+# modules flagged email-enum (sslcert, dnscaa, dnstlsrpt) are kept for their DNS results; the
+# e-mail addresses they emit are discarded in load_events().
+EXCLUDED_MODULES = ["hunterio"]
 LEVEL_ARGS: dict[ScanLevel, list[str]] = {
-    ScanLevel.PASSIVE: ["-p", "subdomain-enum", "-rf", "passive"],
-    ScanLevel.STANDARD: ["-p", "subdomain-enum", "web", "-ef", *FORBIDDEN_FLAGS],
+    ScanLevel.PASSIVE: ["-p", "subdomain-enum", "-rf", "passive", "-em", *EXCLUDED_MODULES],
+    ScanLevel.STANDARD: ["-p", "subdomain-enum", "web", "-ef", *FORBIDDEN_FLAGS,
+                         "-em", *EXCLUDED_MODULES],
 }
+
+# Personal data BBOT may emit: never stored, never shown in reports.
+PERSONAL_DATA_EVENTS = {"EMAIL_ADDRESS", "USERNAME", "PASSWORD", "HASHED_PASSWORD"}
 
 
 class ScanNotAllowed(PermissionError):
@@ -99,7 +107,7 @@ def run_scan(raw_domain: str, level: str, domain_verified: bool) -> ScanResult:
 
 
 def load_events(path: Path) -> list[dict]:
-    """BBOT JSON output is one JSON event per line (NDJSON)."""
+    """BBOT JSON output is one JSON event per line (NDJSON). Personal data events are dropped."""
     if not path.exists():
         return []
     events = []
@@ -109,7 +117,9 @@ def load_events(path: Path) -> list[dict]:
             if not line:
                 continue
             try:
-                events.append(json.loads(line))
+                event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(event, dict) and event.get("type") not in PERSONAL_DATA_EVENTS:
+                events.append(event)
     return events

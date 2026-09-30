@@ -64,7 +64,10 @@ def test_run_scan_reads_events_then_deletes_bbot_output(tmp_path, monkeypatch):
         "a = sys.argv\n"
         "d = pathlib.Path(a[a.index('-o') + 1]) / a[a.index('-n') + 1]\n"
         "d.mkdir(parents=True)\n"
-        "(d / 'output.json').write_text(json.dumps({'type': 'DNS_NAME', 'data': 'www.example.fr'}) + '\\n')\n"
+        "(d / 'output.json').write_text('\\n'.join(json.dumps(e) for e in [\n"
+        "    {'type': 'DNS_NAME', 'data': 'www.example.fr'},\n"
+        "    {'type': 'EMAIL_ADDRESS', 'data': 'jane@example.fr'},\n"
+        "]) + '\\n')\n"
     )
     fake.chmod(0o755)
     settings = get_settings()
@@ -75,3 +78,8 @@ def test_run_scan_reads_events_then_deletes_bbot_output(tmp_path, monkeypatch):
     assert result.returncode == 0
     assert result.events == [{"type": "DNS_NAME", "data": "www.example.fr"}]
     assert list((tmp_path / "scans").iterdir()) == []
+
+
+def test_email_harvesting_module_is_excluded_at_every_level():
+    for args in LEVEL_ARGS.values():
+        assert "hunterio" in args[args.index("-em") + 1:]
