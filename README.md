@@ -24,6 +24,9 @@ rq worker scans                         # worker (nécessite Redis)
 cd frontend && npm install && npm run dev   # front sur http://localhost:5173
 ```
 
+## Production
+Déploiement sur VPS derrière Traefik (surfaceattackwatch.com) : voir [`docs/DEPLOIEMENT.md`](docs/DEPLOIEMENT.md).
+
 ## Architecture
 - **Front** : React 19 + Tailwind + shadcn/ui (même stack que Waselni_V2.0), build Vite.
 - **Back** : FastAPI (API JSON `/api`, JWT), SQLAlchemy, worker RQ qui lance BBOT en sous-processus.
