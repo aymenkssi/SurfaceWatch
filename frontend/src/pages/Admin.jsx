@@ -7,6 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScanStatusBadge } from "@/components/ScanStatusBadge";
+import { SmtpSettingsCard } from "@/components/SmtpSettingsCard";
 import { api, errorMessage } from "@/lib/api";
 import { formatDate } from "@/lib/format";
 
@@ -16,6 +17,9 @@ const ACTION_LABELS = {
   "scan.requested": "Scan demandé",
   "domain.manual_verify": "Validation manuelle",
   "domain.revoke_verify": "Vérification retirée",
+  "smtp.update": "Config. e-mail modifiée",
+  "smtp.reset": "Config. e-mail supprimée",
+  "smtp.test": "E-mail de test",
 };
 const DOMAIN_FILTERS = { pending: "Non vérifiés", verified: "Vérifiés", all: "Tous" };
 
@@ -300,6 +304,8 @@ export default function Admin() {
           </Table>
         </CardContent>
       </Card>
+
+      <SmtpSettingsCard />
 
       <Card className="shadow-soft">
         <CardHeader><CardTitle className="text-base">Journal d'audit (50 derniers)</CardTitle></CardHeader>

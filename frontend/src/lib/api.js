@@ -51,7 +51,10 @@ const MESSAGES = {
 
 export function errorMessage(error, fallback = "Une erreur est survenue.") {
   const detail = error?.response?.data?.detail;
-  if (typeof detail === "string") return MESSAGES[detail] ?? detail;
+  if (typeof detail === "string") {
+    if (detail.startsWith("smtp error: ")) return `Échec de l'envoi : ${detail.slice(12)}`;
+    return MESSAGES[detail] ?? detail;
+  }
   if (Array.isArray(detail)) return "Données invalides : vérifiez le formulaire.";
   return fallback;
 }

@@ -65,7 +65,9 @@ propre quota journalier (`ADVANCED_MAX_SCANS_PER_DAY`, défaut 1) et son propre 
   `account.password_reset`.
 - **Notifications** : e-mail de fin (ou d'échec) de scan, avec un lien seulement (pas de
   résultats dans l'e-mail). Désactivable dans « Mon compte ».
-- **SMTP** fourni par l'exploitant via l'env (`SMTP_*`) ; sans SMTP, ces fonctions sont masquées.
+- **SMTP** fourni par l'exploitant, configuré dans `/admin` (pré-rempli pour Brevo, clé chiffrée
+  en base, modifications journalisées, e-mail de test) ; repli sur l'env (`SMTP_*`) si rien n'est
+  enregistré. Sans SMTP, ces fonctions sont masquées.
 
 ## Hors périmètre MVP
 Paiement, API publique, planification récurrente, e-mails d'alerte, clés API fournies

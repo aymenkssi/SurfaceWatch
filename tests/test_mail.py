@@ -149,3 +149,111 @@ def test_late_columns_are_idempotent():
     init_db()
     with SessionLocal() as db:
         assert db.query(Scan).count() >= 0
+
+
+# --- SMTP configuration from the admin page -------------------------------------------------
+
+def _admin_headers(client) -> tuple[str, dict]:
+    email, h = _register(client)
+    with SessionLocal() as db:
+        db.query(User).filter_by(email=email).one().is_admin = True
+        db.commit()
+    return email, h
+
+
+@pytest.fixture
+def admin_smtp(client, monkeypatch):
+    sent = []
+    monkeypatch.setattr(mailer, "_transport", sent.append)
+    email, h = _admin_headers(client)
+    yield email, h, sent
+    client.delete("/api/admin/smtp", headers=h)
+
+
+BREVO = {"host": "smtp-relay.brevo.com", "port": 587, "security": "starttls",
+         "username": "login@example.com", "password": "xsmtpsib-super-secret",
+         "from_address": "noreply@example.com", "public_url": "https://app.example.test/"}
+
+
+def test_smtp_settings_are_admin_only(client):
+    _, h = _register(client)
+    assert client.get("/api/admin/smtp", headers=h).status_code == 403
+    assert client.put("/api/admin/smtp", json=BREVO, headers=h).status_code == 403
+    assert client.post("/api/admin/smtp/test", json={}, headers=h).status_code == 403
+
+
+def test_admin_smtp_config_overrides_env_and_hides_secret(client, admin_smtp):
+    email, h, sent = admin_smtp
+    r = client.get("/api/admin/smtp", headers=h).json()
+    assert r["source"] == "none" and r["brevo_defaults"]["host"] == "smtp-relay.brevo.com"
+    assert client.get("/api/features").json() == {"email": False}
+
+    r = client.put("/api/admin/smtp", json=BREVO, headers=h)
+    assert r.status_code == 200
+    out = r.json()
+    assert out["source"] == "admin" and out["enabled"] and out["password_set"]
+    assert "xsmtpsib" not in r.text and "password" not in out
+    assert client.get("/api/features").json() == {"email": True}
+
+    # Encrypted at rest, decrypted for sending.
+    with SessionLocal() as db:
+        from app.models import SmtpSettings
+        row = db.get(SmtpSettings, 1)
+        assert row.password_encrypted and "xsmtpsib" not in row.password_encrypted
+        audit = db.query(AuditLog).filter_by(action="smtp.update").order_by(
+            AuditLog.created_at.desc()).first()
+    assert audit.user_email == email and "password" in audit.details
+    assert "xsmtpsib" not in audit.details
+    cfg = mailer.get_config()
+    assert cfg.password == "xsmtpsib-super-secret" and cfg.username == "login@example.com"
+
+    # Links use the admin-configured public URL.
+    user_email, _ = _register(client)
+    client.post("/api/auth/forgot-password", json={"email": user_email})
+    assert "https://app.example.test/reset-password?token=" in sent[-1].get_content()
+    assert "<noreply@example.com>" in sent[-1]["From"]
+
+    # Omitting the password keeps it; clear_password removes it.
+    body = {k: v for k, v in BREVO.items() if k != "password"}
+    assert client.put("/api/admin/smtp", json=body, headers=h).json()["password_set"]
+    r = client.put("/api/admin/smtp", json={**body, "clear_password": True}, headers=h).json()
+    assert r["password_set"] is False
+
+    # Reset falls back to the (empty) environment configuration.
+    assert client.delete("/api/admin/smtp", headers=h).json()["source"] == "none"
+    assert mailer.enabled() is False
+
+
+def test_admin_smtp_rejects_header_injection(client, admin_smtp):
+    _, h, _ = admin_smtp
+    for bad in ({"host": "smtp.example.test\r\nX: y"}, {"username": "a\r\nb"},
+                {"from_address": "not-an-email"}, {"security": "tls"}, {"port": 0},
+                {"public_url": "javascript:alert(1)"}):
+        assert client.put("/api/admin/smtp", json={**BREVO, **bad}, headers=h).status_code == 422
+
+
+def test_admin_test_email(client, admin_smtp, monkeypatch):
+    email, h, sent = admin_smtp
+    assert client.post("/api/admin/smtp/test", json={}, headers=h).status_code == 503
+    client.put("/api/admin/smtp", json=BREVO, headers=h)
+    r = client.post("/api/admin/smtp/test", json={}, headers=h)
+    assert r.status_code == 200 and r.json() == {"sent_to": email}
+    assert sent[-1]["To"] == email and "test" in sent[-1]["Subject"]
+
+    def broken(msg):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr(mailer, "_transport", broken)
+    r = client.post("/api/admin/smtp/test", json={"to": "other@example.fr"}, headers=h)
+    assert r.status_code == 502 and "connection refused" in r.json()["detail"]
+    with SessionLocal() as db:
+        results = [a.details for a in db.query(AuditLog).filter_by(action="smtp.test")]
+    assert any("result=error" in d for d in results) and any("result=ok" in d for d in results)
+
+
+def test_unreadable_password_after_secret_key_change(client, admin_smtp, monkeypatch):
+    _, h, _ = admin_smtp
+    client.put("/api/admin/smtp", json=BREVO, headers=h)
+    monkeypatch.setattr(get_settings(), "secret_key", "another-secret-key-of-sufficient-length")
+    assert mailer.get_config().password == ""
+    monkeypatch.undo()

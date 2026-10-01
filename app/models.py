@@ -124,3 +124,24 @@ class AuditLog(Base):
     # Free-form context, e.g. the domain owner and the admin's reason for a manual validation.
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class SmtpSettings(Base):
+    """Outgoing e-mail configuration edited from the admin page (single row, id=1).
+
+    When this row exists it takes precedence over the SMTP_* environment variables.
+    The SMTP password / API key is stored encrypted (see app.crypto), never in clear.
+    """
+
+    __tablename__ = "smtp_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    host: Mapped[str] = mapped_column(String(253), default="")
+    port: Mapped[int] = mapped_column(default=587)
+    security: Mapped[str] = mapped_column(String(10), default="starttls")  # starttls|ssl|none
+    username: Mapped[str] = mapped_column(String(254), default="")
+    password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    from_address: Mapped[str] = mapped_column(String(254), default="")
+    public_url: Mapped[str] = mapped_column(String(300), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_by: Mapped[str | None] = mapped_column(String(254), nullable=True)  # admin e-mail
