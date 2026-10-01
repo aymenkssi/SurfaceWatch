@@ -1,0 +1,96 @@
+# Production stack for a VPS shared with other apps, behind the Traefik reverse proxy
+# (shared external Docker network "web", Let's Encrypt resolver "letsencrypt").
+# Guide: docs/DEPLOIEMENT.md
+#
+# Only "web" joins the "web" network and is published through Traefik: no host port is
+# opened, and Postgres / Redis stay on the private "internal" network.
+
+name: surfacewatch
+
+services:
+  web:
+    build: .
+    container_name: surfacewatch-web
+    restart: always
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://surfacewatch:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/surfacewatch
+      # Trust X-Forwarded-For from Traefik so the audit log records the real client IP (rule 4)
+      FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - scans:/srv/data
+    networks:
+      - internal
+      - web
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=web
+      # HTTPS
+      - traefik.http.routers.surfacewatch.rule=Host(`surfaceattackwatch.com`) || Host(`www.surfaceattackwatch.com`)
+      - traefik.http.routers.surfacewatch.entrypoints=websecure
+      - traefik.http.routers.surfacewatch.tls.certresolver=letsencrypt
+      - traefik.http.services.surfacewatch.loadbalancer.server.port=8000
+      # HTTP -> HTTPS (scoped to this app, the Traefik config is left untouched)
+      - traefik.http.routers.surfacewatch-http.rule=Host(`surfaceattackwatch.com`) || Host(`www.surfaceattackwatch.com`)
+      - traefik.http.routers.surfacewatch-http.entrypoints=web
+      - traefik.http.routers.surfacewatch-http.middlewares=surfacewatch-https
+      - traefik.http.middlewares.surfacewatch-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.surfacewatch-https.redirectscheme.permanent=true
+
+  worker:
+    build: .
+    container_name: surfacewatch-worker
+    restart: always
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://surfacewatch:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/surfacewatch
+    command: ["rq", "worker", "scans", "--url", "redis://redis:6379/0"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - scans:/srv/data
+    networks:
+      - internal
+
+  redis:
+    image: redis:7-alpine
+    container_name: surfacewatch-redis
+    restart: always
+    networks:
+      - internal
+
+  db:
+    image: postgres:16-alpine
+    container_name: surfacewatch-db
+    restart: always
+    environment:
+      POSTGRES_USER: surfacewatch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: surfacewatch
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U surfacewatch -d surfacewatch"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - internal
+
+volumes:
+  scans:
+  pgdata:
+
+networks:
+  web:
+    external: true
+  internal:
+    driver: bridge
