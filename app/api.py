@@ -30,8 +30,9 @@ def enqueue_scan(scan_id: str) -> str:
 
     settings = get_settings()
     queue = Queue("scans", connection=Redis.from_url(settings.redis_url))
-    job = queue.enqueue("app.worker.execute_scan", scan_id,
-                        job_timeout=settings.scan_timeout_seconds + 60)
+    # RQ ceiling must clear the longest per-level hard timeout (enforced in scans.run_scan).
+    job_timeout = max(settings.scan_timeout_seconds, settings.advanced_scan_timeout_seconds) + 60
+    job = queue.enqueue("app.worker.execute_scan", scan_id, job_timeout=job_timeout)
     return job.id
 
 
@@ -53,6 +54,8 @@ class DomainIn(BaseModel):
 class ScanIn(BaseModel):
     domain_id: str
     level: scans.ScanLevel = scans.ScanLevel.PASSIVE
+    # Explicit opt-in required for aggressive levels (advanced brute-force).
+    consent: bool = False
 
 
 def _user_out(user: User) -> dict:
@@ -215,23 +218,34 @@ def start_scan(body: ScanIn, request: Request, user: User = Depends(get_current_
     settings = get_settings()
     d = _get_domain(db, user, body.domain_id)
 
-    # Rule 1: no active scan without proof of ownership.
-    if body.level is not scans.ScanLevel.PASSIVE and not d.verified:
+    # Rule 1: no active scan without proof of ownership (re-checked in the worker too).
+    if body.level in scans.ACTIVE_LEVELS and not d.verified:
         raise HTTPException(status_code=403, detail="active scans require a verified domain")
 
-    # Rule 2 + SPEC guardrails: concurrency and daily quota.
+    # Advanced brute-force requires an explicit, logged opt-in on top of ownership proof.
+    if body.level in scans.CONSENT_LEVELS and not body.consent:
+        raise HTTPException(status_code=403,
+                            detail="advanced scans require explicit consent to brute-force testing")
+
+    # Rule 2 + SPEC guardrails: one scan at a time, plus a per-level daily quota.
     if _count_scans(db, user, Scan.status.in_(ACTIVE_STATUSES)) >= settings.max_concurrent_scans_per_user:
         raise HTTPException(status_code=429, detail="a scan is already running")
     since: datetime = utcnow() - timedelta(days=1)
-    if _count_scans(db, user, Scan.created_at >= since) >= settings.max_scans_per_day:
+    if body.level is scans.ScanLevel.ADVANCED:
+        daily_limit = settings.advanced_max_scans_per_day
+        used = _count_scans(db, user, Scan.created_at >= since, Scan.level == body.level.value)
+    else:
+        daily_limit = settings.max_scans_per_day
+        used = _count_scans(db, user, Scan.created_at >= since)
+    if used >= daily_limit:
         raise HTTPException(status_code=429, detail="daily scan quota reached")
 
     scan = Scan(user_id=user.id, domain=d.name, level=body.level.value)
     db.add(scan)
     db.flush()
-    # Rule 4: audit every scan request.
+    # Rule 4: audit every scan request (consent recorded for aggressive levels).
     db.add(AuditLog(user_id=user.id, user_email=user.email, action="scan.requested",
-                    domain=d.name, level=scan.level, scan_id=scan.id,
+                    domain=d.name, level=scan.level, consent=body.consent, scan_id=scan.id,
                     source_ip=request.client.host if request.client else None))
     db.commit()
 

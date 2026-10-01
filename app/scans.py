@@ -24,6 +24,7 @@ from app.domains import normalize_domain
 class ScanLevel(str, Enum):
     PASSIVE = "passive"
     STANDARD = "standard"  # active — requires a verified domain (v0.3)
+    ADVANCED = "advanced"  # active + brute-force — verified domain AND explicit consent (v0.4)
 
 
 # Server-side presets. NEVER build these from user input.
@@ -34,11 +35,38 @@ FORBIDDEN_FLAGS = ["loud", "invasive", "iis-shortnames", "web-heavy"]
 # modules flagged email-enum (sslcert, dnscaa, dnstlsrpt) are kept for their DNS results; the
 # e-mail addresses they emit are discarded in load_events().
 EXCLUDED_MODULES = ["hunterio"]
+
+# "advanced" adds surface-level brute-force on top of the standard web scan:
+#   - dnsbrute: subdomain name brute-force (needs massdns in the worker image)
+#   - webbrute: web directory brute-force (surface-level, 1000-word list)
+# It deliberately still excludes, via flags:
+#   - invasive: credential brute-force against live services (legba, medusa) — never run
+#   - iis-shortnames / web-heavy: IIS shortname brute-force (webbrute_shortnames) and other
+#     heavy web modules
+#   - web-paramminer: parameter brute-force (slow, noisy, low signal)
+# kitchen-sink / paramminer / raw modules stay impossible: users only pick a level.
+ADVANCED_BRUTE_MODULES = ["dnsbrute", "webbrute"]
+ADVANCED_FORBIDDEN_FLAGS = ["invasive", "iis-shortnames", "web-heavy", "web-paramminer"]
+
 LEVEL_ARGS: dict[ScanLevel, list[str]] = {
     ScanLevel.PASSIVE: ["-p", "subdomain-enum", "-rf", "passive", "-em", *EXCLUDED_MODULES],
     ScanLevel.STANDARD: ["-p", "subdomain-enum", "web", "-ef", *FORBIDDEN_FLAGS,
                          "-em", *EXCLUDED_MODULES],
+    ScanLevel.ADVANCED: ["-p", "subdomain-enum", "web", "-m", *ADVANCED_BRUTE_MODULES,
+                         "-ef", *ADVANCED_FORBIDDEN_FLAGS, "-em", *EXCLUDED_MODULES],
 }
+
+# Levels that send active traffic to the target: a verified domain is mandatory.
+ACTIVE_LEVELS = frozenset({ScanLevel.STANDARD, ScanLevel.ADVANCED})
+# Levels aggressive enough to require explicit, logged user consent.
+CONSENT_LEVELS = frozenset({ScanLevel.ADVANCED})
+
+
+def timeout_for(level: ScanLevel) -> int:
+    settings = get_settings()
+    if level is ScanLevel.ADVANCED:
+        return settings.advanced_scan_timeout_seconds
+    return settings.scan_timeout_seconds
 
 # Personal data BBOT may emit: never stored, never shown in reports.
 PERSONAL_DATA_EVENTS = {"EMAIL_ADDRESS", "USERNAME", "PASSWORD", "HASHED_PASSWORD"}
@@ -78,7 +106,7 @@ def run_scan(raw_domain: str, level: str, domain_verified: bool) -> ScanResult:
     domain = normalize_domain(raw_domain)
     level = ScanLevel(level)
 
-    if level is not ScanLevel.PASSIVE and not domain_verified:
+    if level in ACTIVE_LEVELS and not domain_verified:
         raise ScanNotAllowed("active scans require a verified domain")
 
     scan_id = f"sw_{uuid.uuid4().hex[:12]}"
@@ -88,7 +116,7 @@ def run_scan(raw_domain: str, level: str, domain_verified: bool) -> ScanResult:
     cmd = build_command(domain, level, scan_id, output_dir)
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=settings.scan_timeout_seconds, check=False
+            cmd, capture_output=True, text=True, timeout=timeout_for(level), check=False
         )
     except subprocess.TimeoutExpired:
         shutil.rmtree(output_dir / scan_id, ignore_errors=True)

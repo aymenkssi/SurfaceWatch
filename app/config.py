@@ -23,6 +23,9 @@ class Settings(BaseSettings):
     scan_timeout_seconds: int = 1800
     max_scans_per_day: int = 5
     max_concurrent_scans_per_user: int = 1
+    # Advanced level (active + brute-force): stricter, dedicated limits.
+    advanced_scan_timeout_seconds: int = 3600
+    advanced_max_scans_per_day: int = 1
     retention_days: int = 30
     scans_dir: Path = Path("./data/scans")
     bbot_bin: str = "bbot"

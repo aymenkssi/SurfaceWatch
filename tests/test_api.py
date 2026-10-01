@@ -155,3 +155,39 @@ def test_queue_failure_does_not_consume_quota(client):
     d = _add_domain(client, h)
     assert client.post("/api/scans", json={"domain_id": d["id"]}, headers=h).status_code == 503
     assert client.get("/api/scans", headers=h).json() == []
+
+
+def test_advanced_scan_requires_ownership_then_consent_and_is_logged(client, queued, monkeypatch):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    # Unverified domain: blocked on ownership proof first.
+    assert client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced"},
+                       headers=h).status_code == 403 and not queued
+
+    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: value == d["record_value"])
+    assert client.post(f"/api/domains/{d['id']}/verify", headers=h).json()["verified"] is True
+
+    # Verified but no consent: still blocked.
+    assert client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced"},
+                       headers=h).status_code == 403 and not queued
+
+    # Verified + explicit consent: accepted and audited with the consent flag.
+    r = client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced", "consent": True},
+                    headers=h)
+    assert r.status_code == 202 and queued == [r.json()["id"]]
+    with SessionLocal() as db:
+        log = db.query(AuditLog).filter_by(scan_id=r.json()["id"]).one()
+    assert (log.level, log.consent) == ("advanced", True)
+
+
+def test_advanced_level_has_its_own_daily_quota(client, queued, monkeypatch):
+    from app.config import get_settings
+
+    h = _auth(client)
+    d = _add_domain(client, h)
+    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: True)
+    client.post(f"/api/domains/{d['id']}/verify", headers=h)
+    monkeypatch.setattr(get_settings(), "advanced_max_scans_per_day", 0)
+    r = client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced", "consent": True},
+                    headers=h)
+    assert r.status_code == 429 and r.json()["detail"] == "daily scan quota reached"

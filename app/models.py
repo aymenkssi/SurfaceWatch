@@ -88,6 +88,8 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(40))
     domain: Mapped[str] = mapped_column(String(253))
     level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Explicit user consent recorded for aggressive levels (advanced brute-force).
+    consent: Mapped[bool] = mapped_column(Boolean, default=False)
     source_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     scan_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
