@@ -70,6 +70,7 @@ class PreferencesIn(BaseModel):
 
 class DomainIn(BaseModel):
     domain: str = Field(max_length=300)
+    renew: bool = False  # issue a new token even if the current one is still valid
 
 
 class ScanIn(BaseModel):
@@ -273,6 +274,10 @@ def add_domain(body: DomainIn, user: User = Depends(get_current_user),
     d = db.scalar(select(Domain).where(Domain.user_id == user.id, Domain.name == challenge.domain))
     if d is not None and d.verified:
         return _domain_out(d)
+    # Keep a still-valid token: re-adding the domain must not silently invalidate
+    # a TXT record the user may already have published.
+    if d is not None and not body.renew and as_utc(d.token_expires_at) > utcnow():
+        return _domain_out(d)
     if d is None:
         d = Domain(user_id=user.id, name=challenge.domain)
         db.add(d)
@@ -291,12 +296,17 @@ def verify_domain(domain_id: str, user: User = Depends(get_current_user),
         return _domain_out(d)
     if as_utc(d.token_expires_at) < utcnow():
         raise HTTPException(status_code=410, detail="token expired, request a new one")
-    if domains.check_txt_record(d.record_name, d.record_value):
+    check = domains.lookup_txt_record(d.record_name, d.record_value)
+    if check.ok:
         d.verified = True
         d.verified_at = utcnow()
         d.verification_method = "dns"
         db.commit()
-    return _domain_out(d)
+    out = _domain_out(d)
+    if not check.ok:
+        out["verify_error"] = check.reason
+        out["verify_found"] = list(check.found)
+    return out
 
 
 @router.delete("/domains/{domain_id}", status_code=status.HTTP_204_NO_CONTENT)

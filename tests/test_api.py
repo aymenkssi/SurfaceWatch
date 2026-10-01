@@ -71,6 +71,29 @@ def test_domain_is_normalized_and_rejects_garbage(client):
     assert client.post("/api/domains", json={"domain": "example.fr; rm -rf /"}, headers=h).status_code == 400
 
 
+def _txt_ok_if(expected):
+    return lambda name, value: domains.TxtCheck(domains.TXT_OK if value == expected else domains.TXT_MISMATCH)
+
+
+def test_re_adding_domain_keeps_valid_token(client):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    again = client.post("/api/domains", json={"domain": "example.fr"}, headers=h).json()
+    assert again["record_value"] == d["record_value"]
+    renewed = client.post("/api/domains", json={"domain": "example.fr", "renew": True}, headers=h).json()
+    assert renewed["record_value"] != d["record_value"]
+
+
+def test_verify_reports_failure_reason(client, monkeypatch):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    monkeypatch.setattr(domains, "lookup_txt_record",
+                        lambda name, value: domains.TxtCheck(domains.TXT_MISMATCH, ("sw-verify=old",)))
+    r = client.post(f"/api/domains/{d['id']}/verify", headers=h).json()
+    assert r["verified"] is False
+    assert r["verify_error"] == "mismatch" and r["verify_found"] == ["sw-verify=old"]
+
+
 def test_domains_are_isolated_between_users(client):
     d = _add_domain(client, _auth(client))
     other = _auth(client)
@@ -84,9 +107,9 @@ def test_active_scan_requires_verified_domain(client, queued, monkeypatch):
     r = client.post("/api/scans", json={"domain_id": d["id"], "level": "standard"}, headers=h)
     assert r.status_code == 403 and not queued
 
-    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: False)
+    monkeypatch.setattr(domains, "lookup_txt_record", lambda name, value: domains.TxtCheck(domains.TXT_NOT_FOUND))
     assert client.post(f"/api/domains/{d['id']}/verify", headers=h).json()["verified"] is False
-    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: value == d["record_value"])
+    monkeypatch.setattr(domains, "lookup_txt_record", _txt_ok_if(d["record_value"]))
     assert client.post(f"/api/domains/{d['id']}/verify", headers=h).json()["verified"] is True
 
     r = client.post("/api/scans", json={"domain_id": d["id"], "level": "standard"}, headers=h)
@@ -184,7 +207,7 @@ def test_advanced_scan_requires_ownership_then_consent_and_is_logged(client, que
     assert client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced"},
                        headers=h).status_code == 403 and not queued
 
-    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: value == d["record_value"])
+    monkeypatch.setattr(domains, "lookup_txt_record", _txt_ok_if(d["record_value"]))
     assert client.post(f"/api/domains/{d['id']}/verify", headers=h).json()["verified"] is True
 
     # Verified but no consent: still blocked.
@@ -205,7 +228,7 @@ def test_advanced_level_has_its_own_daily_quota(client, queued, monkeypatch):
 
     h = _auth(client)
     d = _add_domain(client, h)
-    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: True)
+    monkeypatch.setattr(domains, "lookup_txt_record", lambda name, value: domains.TxtCheck(domains.TXT_OK))
     client.post(f"/api/domains/{d['id']}/verify", headers=h)
     monkeypatch.setattr(get_settings(), "advanced_max_scans_per_day", 0)
     r = client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced", "consent": True},
