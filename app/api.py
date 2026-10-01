@@ -6,6 +6,7 @@ import hashlib
 import secrets
 from collections import Counter
 from datetime import datetime, timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
@@ -14,12 +15,13 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import domains, mailer, reports, scans
+from app import crypto, domains, mailer, reports, scans
 from app.auth import (create_access_token, get_current_admin, get_current_user, hash_password,
                       verify_password)
 from app.config import get_settings
 from app.db import get_db
-from app.models import AuditLog, Domain, PasswordResetToken, Scan, User, as_utc, utcnow
+from app.models import (AuditLog, Domain, PasswordResetToken, Scan, SmtpSettings, User, as_utc,
+                        utcnow)
 
 router = APIRouter(prefix="/api")
 
@@ -591,3 +593,118 @@ def admin_audit(limit: int = 50, _: User = Depends(get_current_admin),
     return [{"id": a.id, "action": a.action, "user_email": a.user_email, "domain": a.domain,
              "level": a.level, "consent": a.consent, "source_ip": a.source_ip,
              "details": a.details, "created_at": as_utc(a.created_at)} for a in rows]
+
+
+# --- Admin: outgoing e-mail (SMTP) ----------------------------------------------------------
+# Stored in the database so it can be changed without editing .env. The password / API key is
+# write-only: it is encrypted at rest and never sent back to the browser.
+
+# Pre-filled in the admin form; any other SMTP provider can be used instead.
+BREVO_DEFAULTS = {"host": "smtp-relay.brevo.com", "port": 587, "security": "starttls"}
+
+
+class SmtpSettingsIn(BaseModel):
+    host: str = Field(min_length=1, max_length=253, pattern=r"^[A-Za-z0-9.-]+$")
+    port: int = Field(ge=1, le=65535)
+    security: Literal["starttls", "ssl", "none"]
+    username: str = Field(default="", max_length=254, pattern=r"^[^\r\n]*$")
+    # None keeps the stored password; a value replaces it. clear_password removes it.
+    password: str | None = Field(default=None, max_length=500)
+    clear_password: bool = False
+    from_address: EmailStr
+    public_url: str = Field(default="", max_length=300, pattern=r"^(https?://[^\s]+)?$")
+
+
+class SmtpTestIn(BaseModel):
+    to: EmailStr | None = None  # defaults to the admin's own address
+
+
+def _smtp_out(db: Session) -> dict:
+    row = db.get(SmtpSettings, 1)
+    cfg = mailer.get_config()
+    out = {
+        "source": cfg.source if cfg.enabled or row else "none",
+        "enabled": cfg.enabled,
+        "host": cfg.host, "port": cfg.port, "security": cfg.security,
+        "username": cfg.username, "from_address": cfg.from_address,
+        "public_url": row.public_url if row else "",
+        "default_public_url": get_settings().public_url,
+        "password_set": bool(cfg.password),
+        # Stored but unreadable (SECRET_KEY changed): the admin must enter it again.
+        "password_unreadable": bool(row and row.password_encrypted and not cfg.password),
+        "updated_at": as_utc(row.updated_at) if row else None,
+        "updated_by": row.updated_by if row else None,
+        "brevo_defaults": BREVO_DEFAULTS,
+    }
+    return out
+
+
+@router.get("/admin/smtp")
+def admin_get_smtp(_: User = Depends(get_current_admin), db: Session = Depends(get_db)) -> dict:
+    return _smtp_out(db)
+
+
+@router.put("/admin/smtp")
+def admin_update_smtp(body: SmtpSettingsIn, request: Request,
+                      admin: User = Depends(get_current_admin),
+                      db: Session = Depends(get_db)) -> dict:
+    row = db.get(SmtpSettings, 1)
+    if row is None:
+        row = SmtpSettings(id=1)
+        db.add(row)
+    new = {"host": body.host.strip().lower(), "port": body.port, "security": body.security,
+           "username": body.username.strip(), "from_address": str(body.from_address),
+           "public_url": body.public_url.strip().rstrip("/")}
+    changed = [k for k, v in new.items() if getattr(row, k, None) != v]
+    for key, value in new.items():
+        setattr(row, key, value)
+    if body.clear_password:
+        if row.password_encrypted:
+            changed.append("password(cleared)")
+        row.password_encrypted = None
+    elif body.password:
+        row.password_encrypted = crypto.encrypt(body.password)
+        changed.append("password")
+    row.updated_at = utcnow()
+    row.updated_by = admin.email
+    # Field names only: the secret never reaches the audit log.
+    db.add(AuditLog(user_id=admin.id, user_email=admin.email, action="smtp.update", domain="",
+                    source_ip=_client_ip(request),
+                    details="changed=" + (",".join(changed) or "nothing")))
+    db.commit()
+    return _smtp_out(db)
+
+
+@router.delete("/admin/smtp")
+def admin_reset_smtp(request: Request, admin: User = Depends(get_current_admin),
+                     db: Session = Depends(get_db)) -> dict:
+    """Delete the admin-saved configuration; the SMTP_* environment variables apply again."""
+    row = db.get(SmtpSettings, 1)
+    if row is not None:
+        db.delete(row)
+        db.add(AuditLog(user_id=admin.id, user_email=admin.email, action="smtp.reset",
+                        domain="", source_ip=_client_ip(request)))
+        db.commit()
+    return _smtp_out(db)
+
+
+@router.post("/admin/smtp/test")
+def admin_test_smtp(body: SmtpTestIn, request: Request, admin: User = Depends(get_current_admin),
+                    db: Session = Depends(get_db)) -> dict:
+    """Send a test e-mail with the saved configuration and report the SMTP error, if any."""
+    cfg = mailer.get_config()
+    if not cfg.enabled:
+        raise HTTPException(status_code=503, detail="email is not configured")
+    to = str(body.to or admin.email)
+    error = None
+    try:
+        mailer.send_test(cfg, to)
+    except Exception as exc:  # noqa: BLE001 - reported to the admin
+        error = f"{type(exc).__name__}: {exc}"[:300]
+    db.add(AuditLog(user_id=admin.id, user_email=admin.email, action="smtp.test", domain="",
+                    source_ip=_client_ip(request),
+                    details=f"to={to}; result={'ok' if error is None else 'error'}"))
+    db.commit()
+    if error is not None:
+        raise HTTPException(status_code=502, detail=f"smtp error: {error}")
+    return {"sent_to": to}

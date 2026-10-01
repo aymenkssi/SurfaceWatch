@@ -68,7 +68,8 @@ app/
   auth.py        # bcrypt + JWT
   db.py / models.py  # SQLAlchemy : User, Domain, Scan, AuditLog
   worker.py      # jobs RQ : execute_scan (+ e-mail de fin de scan), purge_expired
-  mailer.py      # e-mails via SMTP configuré par l'env (désactivé si SMTP_HOST vide)
+  mailer.py      # e-mails SMTP : config admin en base (clé chiffrée), repli sur l'env
+  crypto.py      # chiffrement des secrets stockés en base (clé dérivée de SECRET_KEY)
   cli.py         # commandes serveur : make-admin / revoke-admin
   config.py      # settings (pydantic-settings, variables d'env)
   domains.py     # normalisation de domaine, jetons, vérification DNS TXT

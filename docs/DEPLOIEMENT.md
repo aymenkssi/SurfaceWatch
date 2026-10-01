@@ -76,24 +76,40 @@ Points importants :
 - Garder une copie du `.env` hors du VPS (gestionnaire de mots de passe).
 
 ### E-mails (mot de passe oublié, notifications)
-Les e-mails passent par **votre propre compte SMTP** (aucune clé n'est embarquée). Variables
-à renseigner dans `.env` :
+Les e-mails passent par **votre propre compte SMTP** (aucune clé n'est embarquée dans le code).
+La configuration se fait maintenant **dans l'interface admin** (`/admin`, carte « E-mails (SMTP) »),
+pas dans le `.env` :
 
-| Variable | Exemple | Rôle |
-|---|---|---|
-| `SMTP_HOST` | `smtp-relay.brevo.com` | serveur SMTP ; **vide = e-mails désactivés** |
-| `SMTP_PORT` | `587` | `587` (STARTTLS) ou `465` (SSL) |
-| `SMTP_SECURITY` | `starttls` | `starttls`, `ssl` ou `none` |
-| `SMTP_USER` / `SMTP_PASSWORD` | identifiants SMTP | laisser vide si le serveur n'en demande pas |
-| `SMTP_FROM` | `noreply@surfaceattackwatch.com` | expéditeur ; le domaine doit être autorisé (SPF/DKIM) chez le fournisseur |
-| `PUBLIC_URL` | `https://surfaceattackwatch.com` | base des liens envoyés par e-mail |
+1. Se connecter avec un compte admin (`python -m app.cli make-admin <email>`, voir plus bas).
+2. Dans `/admin`, carte « E-mails (SMTP) » : les valeurs **Brevo** sont pré-remplies
+   (`smtp-relay.brevo.com`, port `587`, STARTTLS) ; elles restent modifiables pour un autre
+   fournisseur.
+3. Renseigner :
+   - **Identifiant** : l'identifiant SMTP Brevo (compte Brevo › « SMTP & API » › onglet SMTP) ;
+   - **Mot de passe / clé SMTP** : une **clé SMTP** générée au même endroit (pas la clé API) ;
+   - **Expéditeur** : ex. `noreply@surfaceattackwatch.com`. Le domaine doit être ajouté et
+     authentifié dans Brevo (« Expéditeurs, domaines et IP dédiées » : enregistrements DKIM,
+     DMARC et code Brevo à poser dans la zone DNS), sinon les e-mails partent en spam ou sont refusés ;
+   - **URL publique** : `https://surfaceattackwatch.com` (base des liens envoyés). Vide = `PUBLIC_URL` du `.env`.
+4. **Enregistrer**, puis **Envoyer un e-mail de test** : l'erreur SMTP éventuelle s'affiche
+   directement (authentification refusée, expéditeur non validé…).
 
-Sans SMTP, le lien « Mot de passe oublié ? » est masqué et aucune notification n'est envoyée.
-Préférer un fournisseur hébergé dans l'UE (RGPD). Test rapide après démarrage :
-```bash
-docker exec surfacewatch-web python -c "from app import mailer; print(mailer.send('vous@exemple.fr', 'Test', 'OK'))"
-```
-`True` = e-mail remis au serveur SMTP ; `False` = voir `docker logs surfacewatch-web`.
+Sécurité :
+- La clé SMTP est **chiffrée en base** (Fernet, clé dérivée de `SECRET_KEY`) et n'est jamais
+  renvoyée au navigateur (champ en écriture seule, affiché « configurée »).
+- Si `SECRET_KEY` change, la clé enregistrée devient illisible : l'admin l'indique, il suffit
+  de la ressaisir.
+- Chaque modification est journalisée (`smtp.update` avec la liste des champs modifiés, jamais
+  la valeur du secret), ainsi que `smtp.reset` et `smtp.test`.
+
+**Repli `.env`** : tant que rien n'est enregistré dans l'admin, les variables `SMTP_HOST`,
+`SMTP_PORT`, `SMTP_SECURITY`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM` et `PUBLIC_URL` du `.env`
+sont utilisées. Dès qu'une configuration est enregistrée dans l'admin, **elle prime**
+entièrement sur le `.env` ; le bouton « Revenir au .env » la supprime. On peut donc laisser les
+variables `SMTP_*` vides dans le `.env`.
+
+Sans configuration (ni admin, ni `.env`), le lien « Mot de passe oublié ? » est masqué et
+aucune notification n'est envoyée. Brevo est hébergé dans l'UE (RGPD).
 
 ## 4. Lancer l'application
 ```bash
