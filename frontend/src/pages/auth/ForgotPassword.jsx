@@ -1,7 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Loader2, MailCheck } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,6 +13,11 @@ export default function ForgotPassword() {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [sent, setSent] = useState(false);
+  const [emailEnabled, setEmailEnabled] = useState(true);
+
+  useEffect(() => {
+    api.get("/features").then((res) => setEmailEnabled(res.data.email)).catch(() => {});
+  }, []);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -36,7 +42,14 @@ export default function ForgotPassword() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {sent ? (
+          {!emailEnabled ? (
+            <Alert variant="destructive">
+              <AlertDescription>
+                L'envoi d'e-mails n'est pas encore activé sur ce serveur : la réinitialisation par
+                e-mail est indisponible pour le moment. Contactez l'administrateur.
+              </AlertDescription>
+            </Alert>
+          ) : sent ? (
             <div className="flex gap-3 text-sm">
               <MailCheck className="h-5 w-5 text-primary shrink-0" />
               <p>
