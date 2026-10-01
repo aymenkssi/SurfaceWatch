@@ -114,6 +114,12 @@ docker exec surfacewatch-db psql -U surfacewatch -c \
   'select created_at, action, source_ip from audit_log order by created_at desc limit 5'
 ```
 
+Donner le rôle admin à votre compte (après l'avoir créé dans l'interface) ; la page
+`/admin` apparaît alors dans le menu :
+```bash
+docker exec surfacewatch-web python -m app.cli make-admin vous@exemple.fr
+```
+
 ## 6. Purge RGPD quotidienne (rétention 30 jours)
 Les résultats expirés sont purgés après chaque scan ; ajouter une purge quotidienne pour les
 périodes sans scan (`crontab -e`) :

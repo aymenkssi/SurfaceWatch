@@ -40,6 +40,9 @@ const MESSAGES = {
   "scan queue unavailable": "Le service de scan est indisponible. Réessayez plus tard.",
   "token expired, request a new one": "Le jeton a expiré : générez-en un nouveau.",
   "scan still running": "Le scan est encore en cours.",
+  "admin only": "Accès réservé aux administrateurs.",
+  "domain already verified": "Ce domaine est déjà vérifié.",
+  "domain not verified": "Ce domaine n'est pas vérifié.",
 };
 
 export function errorMessage(error, fallback = "Une erreur est survenue.") {

@@ -49,7 +49,8 @@ export function DomainCard({ domain, onChange, onScan, scanBusy }) {
         <CardTitle className="text-lg break-all">{domain.name}</CardTitle>
         {domain.verified ? (
           <Badge variant="outline" className="border-transparent bg-success/15 text-success gap-1">
-            <CheckCircle2 className="h-3 w-3" /> Vérifié
+            <CheckCircle2 className="h-3 w-3" />
+            {domain.verification_method === "manual" ? "Vérifié (manuel)" : "Vérifié"}
           </Badge>
         ) : (
           <Badge variant="outline" className="border-transparent bg-warning/15 text-warning gap-1">

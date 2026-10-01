@@ -40,6 +40,19 @@ propre quota journalier (`ADVANCED_MAX_SCANS_PER_DAY`, défaut 1) et son propre 
 - Journal d'audit de chaque scan (consentement inclus)
 - Purge automatique des résultats après `RETENTION_DAYS`
 
+## Administration (`/admin`)
+- Réservée aux comptes `is_admin` (403 sinon, côté API). Le rôle ne s'attribue **que** depuis
+  le serveur : `python -m app.cli make-admin <email>` (`revoke-admin` pour le retirer).
+- Statistiques : utilisateurs (total, nouveaux 7/30 j), domaines (vérifiés DNS / manuels,
+  en attente), scans demandés (24 h / 7 j / 30 j / total, par niveau, par jour sur 30 j,
+  issus du journal d'audit donc non purgés), scans en cours, statuts et durée moyenne
+  (fenêtre de rétention), journal d'audit récent.
+- **Validation manuelle de propriété** : exception à la règle 1. Un admin peut marquer un
+  domaine comme vérifié sans enregistrement TXT, avec un motif obligatoire. Le domaine est
+  marqué `verification_method = manual` (+ `verified_by`) et l'action est journalisée
+  (`domain.manual_verify` : admin, domaine, propriétaire, motif, IP, date). Un admin peut
+  aussi retirer une vérification (`domain.revoke_verify`), ce qui régénère un jeton.
+
 ## Hors périmètre MVP
 Paiement, API publique, planification récurrente, e-mails d'alerte, clés API fournies
 par l'utilisateur, module `email-enum`.

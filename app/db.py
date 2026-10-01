@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.config import get_settings
@@ -31,6 +31,28 @@ def init_db() -> None:
     from app import models  # noqa: F401  (register models on Base.metadata)
 
     Base.metadata.create_all(engine)
+    _add_missing_columns()
+
+
+# Columns added after the first deployment: create_all() does not alter existing tables.
+_LATE_COLUMNS = {
+    "users": {"is_admin": "BOOLEAN NOT NULL DEFAULT FALSE"},
+    "domains": {"verification_method": "VARCHAR(10)", "verified_by": "VARCHAR(32)"},
+    "audit_log": {"details": "TEXT"},
+}
+
+
+def _add_missing_columns() -> None:
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table, columns in _LATE_COLUMNS.items():
+            existing = {c["name"] for c in inspector.get_columns(table)}
+            for name, ddl in columns.items():
+                if name not in existing:
+                    conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}"))
+        # Domains verified before the column existed were all checked via DNS.
+        conn.execute(text("UPDATE domains SET verification_method = 'dns' "
+                          "WHERE verified AND verification_method IS NULL"))
 
 
 def get_db() -> Iterator[Session]:
