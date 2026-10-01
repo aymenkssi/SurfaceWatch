@@ -14,6 +14,9 @@ Ces règles passent avant toute fonctionnalité. Ne jamais les contourner, même
 1. **Aucun scan actif sans preuve de propriété du domaine.**
    - Méthode principale : enregistrement DNS TXT `_surfacewatch-verify.<domaine>` contenant un jeton unique.
    - Le jeton est lié à un utilisateur ET à un domaine, et expire.
+   - Seule exception : validation manuelle par un **admin** (`/admin`), motif obligatoire,
+     journalisée (`domain.manual_verify`) et marquée `verification_method = manual`.
+     Le rôle admin ne s'attribue qu'en CLI serveur (`python -m app.cli make-admin`).
    - Contexte : art. 323-1 et 323-3-1 du Code pénal (accès frauduleux, mise à disposition d'outil).
 2. **Mode passif** (sources publiques uniquement, aucun paquet vers la cible) : autorisé sans
    vérification, mais avec rate limit strict.
@@ -63,6 +66,7 @@ app/
   auth.py        # bcrypt + JWT
   db.py / models.py  # SQLAlchemy : User, Domain, Scan, AuditLog
   worker.py      # jobs RQ : execute_scan, purge_expired
+  cli.py         # commandes serveur : make-admin / revoke-admin
   config.py      # settings (pydantic-settings, variables d'env)
   domains.py     # normalisation de domaine, jetons, vérification DNS TXT
   scans.py       # lancement BBOT en sous-processus + parsing JSON

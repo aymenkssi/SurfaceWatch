@@ -32,6 +32,9 @@ class User(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(100))
+    # Admins can see platform stats and manually validate domain ownership.
+    # Granted only from the server CLI (python -m app.cli make-admin), never through the API.
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     domains: Mapped[list[Domain]] = relationship(
@@ -51,6 +54,9 @@ class Domain(Base):
     token_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # "dns" (TXT record checked) or "manual" (validated by an admin, see AuditLog).
+    verification_method: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    verified_by: Mapped[str | None] = mapped_column(String(32), nullable=True)  # admin user id
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped[User] = relationship(back_populates="domains")
@@ -75,7 +81,7 @@ class Scan(Base):
 
 
 class AuditLog(Base):
-    """One row per scan request (CLAUDE.md rule 4).
+    """One row per scan request (CLAUDE.md rule 4) and per admin action on a domain.
 
     Deliberately not a foreign key to users: the trail must survive account deletion.
     """
@@ -92,4 +98,6 @@ class AuditLog(Base):
     consent: Mapped[bool] = mapped_column(Boolean, default=False)
     source_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     scan_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Free-form context, e.g. the domain owner and the admin's reason for a manual validation.
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

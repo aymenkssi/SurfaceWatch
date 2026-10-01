@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app import domains, reports, scans
-from app.auth import create_access_token, get_current_user, hash_password, verify_password
+from app.auth import (create_access_token, get_current_admin, get_current_user, hash_password,
+                      verify_password)
 from app.config import get_settings
 from app.db import get_db
 from app.models import AuditLog, Domain, Scan, User, as_utc, utcnow
@@ -59,7 +61,8 @@ class ScanIn(BaseModel):
 
 
 def _user_out(user: User) -> dict:
-    return {"id": user.id, "email": user.email, "created_at": user.created_at}
+    return {"id": user.id, "email": user.email, "is_admin": user.is_admin,
+            "created_at": user.created_at}
 
 
 def _domain_out(d: Domain) -> dict:
@@ -72,6 +75,7 @@ def _domain_out(d: Domain) -> dict:
         "token_expired": not d.verified and as_utc(d.token_expires_at) < utcnow(),
         "verified": d.verified,
         "verified_at": as_utc(d.verified_at),
+        "verification_method": d.verification_method,
         "created_at": as_utc(d.created_at),
     }
 
@@ -179,6 +183,7 @@ def verify_domain(domain_id: str, user: User = Depends(get_current_user),
     if domains.check_txt_record(d.record_name, d.record_value):
         d.verified = True
         d.verified_at = utcnow()
+        d.verification_method = "dns"
         db.commit()
     return _domain_out(d)
 
@@ -308,3 +313,164 @@ def scan_report_pdf(scan_id: str, user: User = Depends(get_current_user),
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     return Response(pdf, media_type="application/pdf",
                     headers={"Content-Disposition": f'attachment; filename="{report.domain}.pdf"'})
+
+
+# --- Admin ---------------------------------------------------------------------------------
+# Every route below requires users.is_admin (get_current_admin).
+
+class ManualVerifyIn(BaseModel):
+    # Why ownership was accepted without the TXT record (kept in the audit log).
+    reason: str = Field(min_length=5, max_length=500)
+
+
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _admin_domain_out(d: Domain) -> dict:
+    return {**_domain_out(d), "owner_email": d.user.email}
+
+
+@router.get("/admin/stats")
+def admin_stats(_: User = Depends(get_current_admin), db: Session = Depends(get_db)) -> dict:
+    now = utcnow()
+    day_ago, week_ago, month_ago = (now - timedelta(days=n) for n in (1, 7, 30))
+
+    def count(model, *conditions) -> int:
+        return db.scalar(select(func.count()).select_from(model).where(*conditions)) or 0
+
+    def grouped(column, *conditions) -> dict:
+        return dict(db.execute(select(column, func.count()).where(*conditions).group_by(column)).all())
+
+    # Scan rows are purged after the retention window; the audit log keeps the full history.
+    requested = AuditLog.action == "scan.requested"
+    days = 30
+    per_day = Counter(as_utc(ts).date().isoformat() for ts in db.scalars(
+        select(AuditLog.created_at).where(requested, AuditLog.created_at >= month_ago)))
+    first_day = now.date() - timedelta(days=days - 1)
+    timeline = [{"date": (first_day + timedelta(days=i)).isoformat(),
+                 "count": per_day.get((first_day + timedelta(days=i)).isoformat(), 0)}
+                for i in range(days)]
+
+    durations: dict[str, list[float]] = {}
+    for level, started, finished in db.execute(
+            select(Scan.level, Scan.started_at, Scan.finished_at)
+            .where(Scan.status == "done", Scan.started_at.is_not(None),
+                   Scan.finished_at.is_not(None))):
+        durations.setdefault(level, []).append(
+            (as_utc(finished) - as_utc(started)).total_seconds())
+
+    return {
+        "users": {
+            "total": count(User),
+            "admins": count(User, User.is_admin.is_(True)),
+            "new_7d": count(User, User.created_at >= week_ago),
+            "new_30d": count(User, User.created_at >= month_ago),
+            "with_verified_domain": db.scalar(select(func.count(func.distinct(Domain.user_id)))
+                                              .where(Domain.verified.is_(True))) or 0,
+        },
+        "domains": {
+            "total": count(Domain),
+            "verified_dns": count(Domain, Domain.verified.is_(True),
+                                  or_(Domain.verification_method != "manual",
+                                      Domain.verification_method.is_(None))),
+            "verified_manual": count(Domain, Domain.verified.is_(True),
+                                     Domain.verification_method == "manual"),
+            "pending": count(Domain, Domain.verified.is_(False)),
+        },
+        "scans": {
+            "requested_total": count(AuditLog, requested),
+            "requested_24h": count(AuditLog, requested, AuditLog.created_at >= day_ago),
+            "requested_7d": count(AuditLog, requested, AuditLog.created_at >= week_ago),
+            "requested_30d": count(AuditLog, requested, AuditLog.created_at >= month_ago),
+            "by_level": grouped(AuditLog.level, requested),
+            "by_status": grouped(Scan.status),  # retention window only
+            "active": count(Scan, Scan.status.in_(ACTIVE_STATUSES)),
+            "advanced_with_consent": count(AuditLog, requested, AuditLog.level == "advanced",
+                                           AuditLog.consent.is_(True)),
+            "avg_duration_seconds": {lvl: round(sum(v) / len(v)) for lvl, v in durations.items()},
+            "per_day": timeline,
+        },
+        "retention_days": get_settings().retention_days,
+    }
+
+
+@router.get("/admin/scans")
+def admin_active_scans(_: User = Depends(get_current_admin), db: Session = Depends(get_db)) -> list:
+    """Queued and running scans across all users."""
+    rows = db.scalars(select(Scan).where(Scan.status.in_(ACTIVE_STATUSES))
+                      .order_by(Scan.created_at))
+    return [{**_scan_out(s), "user_email": s.user.email} for s in rows]
+
+
+@router.get("/admin/domains")
+def admin_domains(q: str = "", status_filter: str = "pending",
+                  _: User = Depends(get_current_admin), db: Session = Depends(get_db)) -> list:
+    """Domains across all users. status_filter: pending | verified | all; q matches name/email."""
+    stmt = select(Domain).join(User)
+    if status_filter == "pending":
+        stmt = stmt.where(Domain.verified.is_(False))
+    elif status_filter == "verified":
+        stmt = stmt.where(Domain.verified.is_(True))
+    if q.strip():
+        like = f"%{q.strip().lower()}%"
+        stmt = stmt.where(or_(Domain.name.like(like), User.email.like(like)))
+    rows = db.scalars(stmt.order_by(Domain.created_at.desc()).limit(200))
+    return [_admin_domain_out(d) for d in rows]
+
+
+@router.post("/admin/domains/{domain_id}/verify")
+def admin_verify_domain(domain_id: str, body: ManualVerifyIn, request: Request,
+                        admin: User = Depends(get_current_admin),
+                        db: Session = Depends(get_db)) -> dict:
+    """Manually accept ownership without the DNS TXT record (exception to rule 1).
+
+    Restricted to admins and always written to the audit log with the admin's reason.
+    """
+    d = db.get(Domain, domain_id)
+    if d is None:
+        raise HTTPException(status_code=404, detail="unknown domain")
+    if d.verified:
+        raise HTTPException(status_code=409, detail="domain already verified")
+    d.verified = True
+    d.verified_at = utcnow()
+    d.verification_method = "manual"
+    d.verified_by = admin.id
+    db.add(AuditLog(user_id=admin.id, user_email=admin.email, action="domain.manual_verify",
+                    domain=d.name, source_ip=_client_ip(request),
+                    details=f"owner={d.user.email}; reason={body.reason.strip()}"))
+    db.commit()
+    return _admin_domain_out(d)
+
+
+@router.post("/admin/domains/{domain_id}/revoke")
+def admin_revoke_domain(domain_id: str, request: Request,
+                        admin: User = Depends(get_current_admin),
+                        db: Session = Depends(get_db)) -> dict:
+    """Withdraw a verification (DNS or manual); the owner must prove ownership again."""
+    d = db.get(Domain, domain_id)
+    if d is None:
+        raise HTTPException(status_code=404, detail="unknown domain")
+    if not d.verified:
+        raise HTTPException(status_code=409, detail="domain not verified")
+    previous = d.verification_method or "dns"
+    d.verified, d.verified_at, d.verification_method, d.verified_by = False, None, None, None
+    # Fresh challenge so the owner can re-verify via DNS.
+    challenge = domains.create_challenge(d.user_id, d.name)
+    d.record_name, d.record_value = challenge.record_name, challenge.record_value
+    d.token_expires_at = challenge.expires_at
+    db.add(AuditLog(user_id=admin.id, user_email=admin.email, action="domain.revoke_verify",
+                    domain=d.name, source_ip=_client_ip(request),
+                    details=f"owner={d.user.email}; previous={previous}"))
+    db.commit()
+    return _admin_domain_out(d)
+
+
+@router.get("/admin/audit")
+def admin_audit(limit: int = 50, _: User = Depends(get_current_admin),
+                db: Session = Depends(get_db)) -> list:
+    rows = db.scalars(select(AuditLog).order_by(AuditLog.created_at.desc())
+                      .limit(max(1, min(limit, 200))))
+    return [{"id": a.id, "action": a.action, "user_email": a.user_email, "domain": a.domain,
+             "level": a.level, "consent": a.consent, "source_ip": a.source_ip,
+             "details": a.details, "created_at": as_utc(a.created_at)} for a in rows]

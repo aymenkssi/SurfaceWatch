@@ -1,11 +1,11 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { LogOut, Radar, User } from "lucide-react";
+import { LogOut, Radar, ShieldCheck, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
 
 function Navbar() {
-  const { isAuthenticated, logout } = useAuth();
+  const { isAuthenticated, user, logout } = useAuth();
   const navigate = useNavigate();
   const linkClass = ({ isActive }) =>
     cn("text-sm font-medium transition-colors hover:text-primary",
@@ -22,6 +22,11 @@ function Navbar() {
           {isAuthenticated ? (
             <>
               <NavLink to="/dashboard" className={linkClass}>Tableau de bord</NavLink>
+              {user?.is_admin && (
+                <NavLink to="/admin" className={(p) => cn(linkClass(p), "flex items-center gap-1")}>
+                  <ShieldCheck className="h-4 w-4" /> Admin
+                </NavLink>
+              )}
               <NavLink to="/account" className={linkClass} aria-label="Mon compte">
                 <User className="h-4 w-4" />
               </NavLink>
