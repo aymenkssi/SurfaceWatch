@@ -2,22 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 from collections import Counter
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app import domains, reports, scans
+from app import domains, mailer, reports, scans
 from app.auth import (create_access_token, get_current_admin, get_current_user, hash_password,
                       verify_password)
 from app.config import get_settings
 from app.db import get_db
-from app.models import AuditLog, Domain, Scan, User, as_utc, utcnow
+from app.models import AuditLog, Domain, PasswordResetToken, Scan, User, as_utc, utcnow
 
 router = APIRouter(prefix="/api")
 
@@ -49,6 +51,23 @@ class Credentials(BaseModel):
     password: str = Field(min_length=10, max_length=128)
 
 
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str = Field(min_length=20, max_length=100)
+    password: str = Field(min_length=10, max_length=128)
+
+
+class DeleteAccountIn(BaseModel):
+    password: str = Field(max_length=128)
+
+
+class PreferencesIn(BaseModel):
+    notify_scan_done: bool
+
+
 class DomainIn(BaseModel):
     domain: str = Field(max_length=300)
 
@@ -62,7 +81,7 @@ class ScanIn(BaseModel):
 
 def _user_out(user: User) -> dict:
     return {"id": user.id, "email": user.email, "is_admin": user.is_admin,
-            "created_at": user.created_at}
+            "notify_scan_done": user.notify_scan_done, "created_at": user.created_at}
 
 
 def _domain_out(d: Domain) -> dict:
@@ -122,16 +141,108 @@ def login(body: Credentials, db: Session = Depends(get_db)) -> dict:
     return _auth_response(user)
 
 
+def _client_ip(request: Request) -> str | None:
+    return request.client.host if request.client else None
+
+
+def _audit_account(db: Session, user: User, action: str, request: Request) -> None:
+    db.add(AuditLog(user_id=user.id, user_email=user.email, action=action, domain="",
+                    source_ip=_client_ip(request)))
+
+
+def _hash_reset_token(token: str) -> str:
+    return hashlib.sha256(token.encode()).hexdigest()
+
+
+@router.get("/features")
+def features() -> dict:
+    """Optional features the front end should show (e.g. "forgot password" needs SMTP)."""
+    return {"email": mailer.enabled()}
+
+
+@router.post("/auth/forgot-password", status_code=status.HTTP_202_ACCEPTED)
+def forgot_password(body: ForgotPasswordIn, request: Request, db: Session = Depends(get_db)) -> dict:
+    """Mail a single-use reset link. Same answer whether the account exists or not."""
+    if not mailer.enabled():
+        raise HTTPException(status_code=503, detail="email is not configured")
+    settings = get_settings()
+    user = db.scalar(select(User).where(User.email == body.email.lower()))
+    if user is None:
+        return {"status": "accepted"}
+
+    now = utcnow()
+    recent = db.scalar(select(func.count()).select_from(PasswordResetToken).where(
+        PasswordResetToken.user_id == user.id,
+        PasswordResetToken.created_at >= now - timedelta(hours=1))) or 0
+    if recent >= settings.password_reset_max_per_hour:
+        return {"status": "accepted"}
+
+    # Only the latest link works (older rows stay until purge: they feed the rate limit).
+    db.execute(update(PasswordResetToken)
+               .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None),
+                      PasswordResetToken.expires_at > now)
+               .values(expires_at=now))
+    token = secrets.token_urlsafe(32)
+    db.add(PasswordResetToken(user_id=user.id, token_hash=_hash_reset_token(token),
+                              expires_at=now + timedelta(minutes=settings.password_reset_ttl_minutes)))
+    _audit_account(db, user, "account.password_reset_requested", request)
+    db.commit()
+    mailer.send_password_reset(user.email, token)
+    return {"status": "accepted"}
+
+
+@router.post("/auth/reset-password", status_code=status.HTTP_204_NO_CONTENT)
+def reset_password(body: ResetPasswordIn, request: Request, db: Session = Depends(get_db)):
+    row = db.scalar(select(PasswordResetToken)
+                    .where(PasswordResetToken.token_hash == _hash_reset_token(body.token)))
+    if row is None or row.used_at is not None or as_utc(row.expires_at) <= utcnow():
+        raise HTTPException(status_code=400, detail="invalid or expired reset link")
+    user = row.user
+    now = utcnow()
+    row.used_at = now
+    db.execute(update(PasswordResetToken)
+               .where(PasswordResetToken.user_id == user.id, PasswordResetToken.used_at.is_(None))
+               .values(expires_at=now))
+    user.password_hash = hash_password(body.password)
+    user.password_changed_at = now
+    _audit_account(db, user, "account.password_reset", request)
+    db.commit()
+    mailer.send_password_changed(user.email)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
 @router.get("/users/me")
 def me(user: User = Depends(get_current_user)) -> dict:
     return _user_out(user)
 
 
+@router.patch("/users/me")
+def update_preferences(body: PreferencesIn, user: User = Depends(get_current_user),
+                       db: Session = Depends(get_db)) -> dict:
+    user.notify_scan_done = body.notify_scan_done
+    db.commit()
+    return _user_out(user)
+
+
 @router.delete("/users/me", status_code=status.HTTP_204_NO_CONTENT)
-def delete_account(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """GDPR erasure: account, domains and scan results. The audit log is kept (rule 4)."""
+def delete_account(body: DeleteAccountIn, request: Request,
+                   user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """GDPR erasure: account, domains, scan results and reset tokens.
+
+    The password is asked again so a stolen session cannot wipe the account. The audit log is
+    kept (rule 4) and records the deletion itself before the data goes.
+    """
+    if not verify_password(body.password, user.password_hash):
+        raise HTTPException(status_code=403, detail="wrong password")
+    if db.scalar(select(func.count()).select_from(Scan).where(
+            Scan.user_id == user.id, Scan.status == "running")):
+        raise HTTPException(status_code=409, detail="wait for the running scan to finish")
+    email = user.email
+    _audit_account(db, user, "account.deleted", request)
+    db.commit()
     db.delete(user)
     db.commit()
+    mailer.send_account_deleted(email)
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
@@ -251,7 +362,7 @@ def start_scan(body: ScanIn, request: Request, user: User = Depends(get_current_
     # Rule 4: audit every scan request (consent recorded for aggressive levels).
     db.add(AuditLog(user_id=user.id, user_email=user.email, action="scan.requested",
                     domain=d.name, level=scan.level, consent=body.consent, scan_id=scan.id,
-                    source_ip=request.client.host if request.client else None))
+                    source_ip=_client_ip(request)))
     db.commit()
 
     try:
@@ -321,10 +432,6 @@ def scan_report_pdf(scan_id: str, user: User = Depends(get_current_user),
 class ManualVerifyIn(BaseModel):
     # Why ownership was accepted without the TXT record (kept in the audit log).
     reason: str = Field(min_length=5, max_length=500)
-
-
-def _client_ip(request: Request) -> str | None:
-    return request.client.host if request.client else None
 
 
 def _admin_domain_out(d: Domain) -> dict:

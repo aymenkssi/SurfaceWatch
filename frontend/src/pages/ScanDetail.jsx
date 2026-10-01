@@ -152,7 +152,7 @@ export default function ScanDetail() {
 
   const download = async (ext) => {
     try {
-      await downloadFile(`/scans/${scanId}/report.${ext}`, `surfacewatch-${scan.domain}.${ext}`);
+      await downloadFile(`/scans/${scanId}/report.${ext}`, `surfaceattackwatch-${scan.domain}.${ext}`);
     } catch (err) {
       toast.error(ext === "pdf" ? "Export PDF indisponible pour le moment." : errorMessage(err));
     }

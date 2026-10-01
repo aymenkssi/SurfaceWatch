@@ -1,6 +1,8 @@
-# SurfaceWatch — contexte pour Claude Code
+# SurfaceAttackWatch — contexte pour Claude Code
 
-> Nom provisoire. Service web **gratuit** de scan EASM (External Attack Surface Management)
+> Nom du service : **SurfaceAttackWatch** (surfaceattackwatch.com), ex-« SurfaceWatch ». Les
+> identifiants techniques (`surfacewatch` : paquet, base, conteneurs, `_surfacewatch-verify`)
+> restent inchangés. Service web **gratuit** de scan EASM (External Attack Surface Management)
 > basé sur **BBOT** (Black Lantern Security), avec génération de rapports.
 
 ## Le projet en une phrase
@@ -65,7 +67,8 @@ app/
   api.py         # routes JSON : auth, domaines, scans, rapports
   auth.py        # bcrypt + JWT
   db.py / models.py  # SQLAlchemy : User, Domain, Scan, AuditLog
-  worker.py      # jobs RQ : execute_scan, purge_expired
+  worker.py      # jobs RQ : execute_scan (+ e-mail de fin de scan), purge_expired
+  mailer.py      # e-mails via SMTP configuré par l'env (désactivé si SMTP_HOST vide)
   cli.py         # commandes serveur : make-admin / revoke-admin
   config.py      # settings (pydantic-settings, variables d'env)
   domains.py     # normalisation de domaine, jetons, vérification DNS TXT

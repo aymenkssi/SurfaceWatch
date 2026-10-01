@@ -1,4 +1,4 @@
-# Spec MVP — SurfaceWatch
+# Spec MVP — SurfaceAttackWatch
 
 ## Objectif du MVP
 Prouver la chaîne complète sur un domaine vérifié :
@@ -52,6 +52,20 @@ propre quota journalier (`ADVANCED_MAX_SCANS_PER_DAY`, défaut 1) et son propre 
   marqué `verification_method = manual` (+ `verified_by`) et l'action est journalisée
   (`domain.manual_verify` : admin, domaine, propriétaire, motif, IP, date). Un admin peut
   aussi retirer une vérification (`domain.revoke_verify`), ce qui régénère un jeton.
+
+## Compte et e-mails
+- **Suppression de compte** depuis « Mon compte » : confirmation par le mot de passe, refusée
+  pendant un scan en cours. Efface compte, domaines, scans et jetons de réinitialisation ;
+  l'entrée `account.deleted` est écrite au journal d'audit avant l'effacement (le journal est
+  conservé, règle 4). Un e-mail de confirmation est envoyé si le SMTP est configuré.
+- **Mot de passe oublié** : lien par e-mail, jeton aléatoire stocké haché (SHA-256), valable
+  60 min, usage unique, seul le dernier lien demandé fonctionne, 3 demandes max par heure.
+  Réponse identique que le compte existe ou non. La réinitialisation ferme toutes les sessions
+  ouvertes et envoie un e-mail d'avertissement. Journal : `account.password_reset_requested`,
+  `account.password_reset`.
+- **Notifications** : e-mail de fin (ou d'échec) de scan, avec un lien seulement (pas de
+  résultats dans l'e-mail). Désactivable dans « Mon compte ».
+- **SMTP** fourni par l'exploitant via l'env (`SMTP_*`) ; sans SMTP, ces fonctions sont masquées.
 
 ## Hors périmètre MVP
 Paiement, API publique, planification récurrente, e-mails d'alerte, clés API fournies

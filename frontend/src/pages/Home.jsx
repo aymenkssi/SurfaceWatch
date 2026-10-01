@@ -31,7 +31,7 @@ export default function Home() {
           Cartographiez votre surface d'attaque externe
         </h1>
         <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-          SurfaceWatch découvre gratuitement les actifs exposés de votre domaine et
+          SurfaceAttackWatch découvre gratuitement les actifs exposés de votre domaine et
           vous remet un rapport clair des risques à traiter en priorité.
         </p>
         <div className="flex gap-3 justify-center">

@@ -1,4 +1,4 @@
-# Déploiement de SurfaceWatch sur le VPS (surfaceattackwatch.com)
+# Déploiement de SurfaceAttackWatch sur le VPS (surfaceattackwatch.com)
 
 Même méthode que les autres apps du VPS (Traefik + Docker Compose, un dossier par app sous
 `/opt/apps`, réseau Docker partagé `web`, certificats Let's Encrypt), avec deux différences :
@@ -15,7 +15,7 @@ Même méthode que les autres apps du VPS (Traefik + Docker Compose, un dossier 
 | `surfacewatch-db` | PostgreSQL 16 | `internal` |
 
 Aucun port n'est ouvert sur l'hôte : seul Traefik (80/443) reçoit le trafic. Postgres et Redis
-ne sont joignables que depuis le réseau privé `internal` de SurfaceWatch, donc aucun conflit
+ne sont joignables que depuis le réseau privé `internal` de SurfaceAttackWatch, donc aucun conflit
 avec les MongoDB des autres apps.
 
 Fichiers utilisés : [`docker-compose.prod.yml`](../docker-compose.prod.yml),
@@ -75,6 +75,26 @@ Points importants :
   faut le faire dans Postgres (`ALTER USER surfacewatch PASSWORD '...'`) puis dans `.env`.
 - Garder une copie du `.env` hors du VPS (gestionnaire de mots de passe).
 
+### E-mails (mot de passe oublié, notifications)
+Les e-mails passent par **votre propre compte SMTP** (aucune clé n'est embarquée). Variables
+à renseigner dans `.env` :
+
+| Variable | Exemple | Rôle |
+|---|---|---|
+| `SMTP_HOST` | `smtp-relay.brevo.com` | serveur SMTP ; **vide = e-mails désactivés** |
+| `SMTP_PORT` | `587` | `587` (STARTTLS) ou `465` (SSL) |
+| `SMTP_SECURITY` | `starttls` | `starttls`, `ssl` ou `none` |
+| `SMTP_USER` / `SMTP_PASSWORD` | identifiants SMTP | laisser vide si le serveur n'en demande pas |
+| `SMTP_FROM` | `noreply@surfaceattackwatch.com` | expéditeur ; le domaine doit être autorisé (SPF/DKIM) chez le fournisseur |
+| `PUBLIC_URL` | `https://surfaceattackwatch.com` | base des liens envoyés par e-mail |
+
+Sans SMTP, le lien « Mot de passe oublié ? » est masqué et aucune notification n'est envoyée.
+Préférer un fournisseur hébergé dans l'UE (RGPD). Test rapide après démarrage :
+```bash
+docker exec surfacewatch-web python -c "from app import mailer; print(mailer.send('vous@exemple.fr', 'Test', 'OK'))"
+```
+`True` = e-mail remis au serveur SMTP ; `False` = voir `docker logs surfacewatch-web`.
+
 ## 4. Lancer l'application
 ```bash
 cd /opt/apps/surfacewatch
@@ -102,7 +122,7 @@ docker ps
 curl -I http://surfaceattackwatch.com          # 301 vers https
 curl -I https://surfaceattackwatch.com         # 200
 curl -i https://surfaceattackwatch.com/health  # {"status":"ok"}
-docker exec surfacewatch-db psql -U surfacewatch -c '\dt'   # users, domains, scans, audit_log
+docker exec surfacewatch-db psql -U surfacewatch -c '\dt'   # users, domains, scans, audit_log, password_reset_tokens
 ```
 Puis dans le navigateur : créer un compte, ajouter **un domaine qui vous appartient**, poser
 l'enregistrement TXT `_surfacewatch-verify.<domaine>`, vérifier, lancer un scan passif.
@@ -188,5 +208,5 @@ en dernier recours (attention aux limites de Let's Encrypt).
 
 ## 12. Nettoyage Docker
 Mêmes commandes que pour les autres apps (`docker system df`, `docker image prune -a`,
-`docker container prune`). ⚠️ Ne jamais lancer `docker volume prune -a` pendant que SurfaceWatch
+`docker container prune`). ⚠️ Ne jamais lancer `docker volume prune -a` pendant que SurfaceAttackWatch
 est arrêté : `surfacewatch_pgdata` partirait avec.

@@ -36,7 +36,9 @@ def init_db() -> None:
 
 # Columns added after the first deployment: create_all() does not alter existing tables.
 _LATE_COLUMNS = {
-    "users": {"is_admin": "BOOLEAN NOT NULL DEFAULT FALSE"},
+    "users": {"is_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
+              "notify_scan_done": "BOOLEAN NOT NULL DEFAULT TRUE",
+              "password_changed_at": "TIMESTAMP WITH TIME ZONE"},
     "domains": {"verification_method": "VARCHAR(10)", "verified_by": "VARCHAR(32)"},
     "audit_log": {"details": "TEXT"},
 }

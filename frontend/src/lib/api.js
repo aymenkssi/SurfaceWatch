@@ -43,6 +43,10 @@ const MESSAGES = {
   "admin only": "Accès réservé aux administrateurs.",
   "domain already verified": "Ce domaine est déjà vérifié.",
   "domain not verified": "Ce domaine n'est pas vérifié.",
+  "email is not configured": "L'envoi d'e-mails n'est pas activé sur ce serveur.",
+  "invalid or expired reset link": "Ce lien est invalide, déjà utilisé ou expiré : faites une nouvelle demande.",
+  "wrong password": "Mot de passe incorrect.",
+  "wait for the running scan to finish": "Un scan est en cours : attendez sa fin avant de supprimer votre compte.",
 };
 
 export function errorMessage(error, fallback = "Une erreur est survenue.") {
