@@ -32,3 +32,37 @@ def test_challenge_format():
 
 def test_tokens_are_unique():
     assert create_challenge("u", "example.fr").record_value != create_challenge("u", "example.fr").record_value
+
+
+class _Rdata:
+    def __init__(self, value):
+        self.strings = [value.encode()]
+
+
+def _fake_dns(monkeypatch, records):
+    """Serve TXT lookups from a {name: [values]} dict instead of the network."""
+    import dns.resolver
+
+    from app import domains
+
+    class FakeResolver:
+        def resolve(self, name, rtype):
+            if name not in records:
+                raise dns.resolver.NXDOMAIN()
+            return [_Rdata(v) for v in records[name]]
+
+    monkeypatch.setattr(domains, "_authoritative_resolver", lambda name, timeout: FakeResolver())
+    monkeypatch.setattr(domains.dns.resolver, "Resolver", lambda *a, **k: FakeResolver())
+
+
+@pytest.mark.parametrize("records, reason", [
+    ({"_sw.example.fr": ["sw-verify=abc"]}, "ok"),
+    ({"_sw.example.fr": [' "sw-verify=abc" ']}, "ok"),
+    ({"_sw.example.fr": ["sw-verify=old"]}, "mismatch"),
+    ({"_sw.example.fr.example.fr": ["sw-verify=abc"]}, "doubled_name"),
+    ({}, "not_found"),
+])
+def test_lookup_txt_record(monkeypatch, records, reason):
+    from app.domains import lookup_txt_record
+    _fake_dns(monkeypatch, records)
+    assert lookup_txt_record("_sw.example.fr", "sw-verify=abc").reason == reason
