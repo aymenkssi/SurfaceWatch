@@ -8,7 +8,9 @@ from fastapi.testclient import TestClient
 from app import api, domains, scans, worker
 from app.db import SessionLocal
 from app.main import app
-from app.models import AuditLog
+from app.models import AuditLog, Domain, Scan
+
+PASSWORD = "correct horse battery"
 
 SAMPLE_EVENTS = [
     {"type": "DNS_NAME", "data": "www.example.fr", "resolved_hosts": ["203.0.113.10"]},
@@ -140,10 +142,28 @@ def test_delete_account_removes_data_but_keeps_audit(client, queued):
     h = _auth(client)
     d = _add_domain(client, h)
     scan_id = client.post("/api/scans", json={"domain_id": d["id"]}, headers=h).json()["id"]
-    assert client.delete("/api/users/me", headers=h).status_code == 204
+    user_id = client.get("/api/users/me", headers=h).json()["id"]
+    wrong = client.request("DELETE", "/api/users/me", json={"password": "not my password"}, headers=h)
+    assert wrong.status_code == 403
+    r = client.request("DELETE", "/api/users/me", json={"password": PASSWORD}, headers=h)
+    assert r.status_code == 204
     assert client.get("/api/users/me", headers=h).status_code == 401
     with SessionLocal() as db:
         assert db.query(AuditLog).filter_by(scan_id=scan_id).count() == 1
+        assert db.query(AuditLog).filter_by(user_id=user_id, action="account.deleted").count() == 1
+        assert db.query(Scan).filter_by(user_id=user_id).count() == 0
+        assert db.query(Domain).filter_by(user_id=user_id).count() == 0
+
+
+def test_delete_account_refused_while_scan_runs(client, queued):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    scan_id = client.post("/api/scans", json={"domain_id": d["id"]}, headers=h).json()["id"]
+    with SessionLocal() as db:
+        db.get(Scan, scan_id).status = "running"
+        db.commit()
+    r = client.request("DELETE", "/api/users/me", json={"password": PASSWORD}, headers=h)
+    assert r.status_code == 409
 
 
 def test_queue_failure_does_not_consume_quota(client):

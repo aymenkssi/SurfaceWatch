@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { errorMessage } from "@/lib/api";
 
-export function AuthForm({ title, description, submitLabel, onSubmit, footer, minLength }) {
+export function AuthForm({ title, description, submitLabel, onSubmit, footer, minLength, passwordHint }) {
   const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -42,7 +42,10 @@ export function AuthForm({ title, description, submitLabel, onSubmit, footer, mi
                      value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="password">Mot de passe</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="password">Mot de passe</Label>
+                {passwordHint}
+              </div>
               <Input id="password" type="password" required minLength={10} maxLength={128}
                      autoComplete={minLength ? "new-password" : "current-password"}
                      value={password} onChange={(e) => setPassword(e.target.value)} />

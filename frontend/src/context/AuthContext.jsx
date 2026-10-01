@@ -49,6 +49,7 @@ export function AuthProvider({ children }) {
     login: (email, password) => authenticate("/auth/login", email, password),
     register: (email, password) => authenticate("/auth/register", email, password),
     logout,
+    setUser,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

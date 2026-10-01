@@ -1,7 +1,11 @@
-# SurfaceWatch
+# SurfaceAttackWatch
 
 Service web gratuit de scan EASM (surface d'attaque externe) avec génération de rapports,
-basé sur [BBOT](https://github.com/blacklanternsecurity/bbot). *Nom provisoire.*
+basé sur [BBOT](https://github.com/blacklanternsecurity/bbot). En ligne sur surfaceattackwatch.com.
+
+Les identifiants techniques gardent l'ancien nom `surfacewatch` (dépôt, paquet Python, base
+Postgres, conteneurs, enregistrement DNS `_surfacewatch-verify`) pour ne casser ni les
+vérifications déjà faites ni le déploiement.
 
 **Statut : v0.2 — application web (front React + API).** Voir [`docs/SPEC.md`](docs/SPEC.md) pour la spec et la roadmap,
 et [`CLAUDE.md`](CLAUDE.md) pour les règles du projet.

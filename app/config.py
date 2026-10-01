@@ -7,7 +7,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    app_name: str = "SurfaceWatch"
+    app_name: str = "SurfaceAttackWatch"
+    # Public base URL of the front end, used for links in e-mails (reset, scan done).
+    public_url: str = "http://localhost:5173"
     secret_key: str = "change-me"
     database_url: str = "sqlite:///./surfacewatch.db"
     redis_url: str = "redis://localhost:6379/0"
@@ -29,6 +31,18 @@ class Settings(BaseSettings):
     retention_days: int = 30
     scans_dir: Path = Path("./data/scans")
     bbot_bin: str = "bbot"
+
+    # E-mail (SMTP). No provider key is embedded: e-mail features are disabled until
+    # SMTP_HOST and SMTP_FROM are set (password reset, notifications).
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_security: str = "starttls"  # starttls | ssl | none
+    smtp_timeout_seconds: int = 15
+    password_reset_ttl_minutes: int = 60
+    password_reset_max_per_hour: int = 3
 
     # Domain verification
     verify_record_prefix: str = "_surfacewatch-verify"

@@ -35,11 +35,18 @@ class User(Base):
     # Admins can see platform stats and manually validate domain ownership.
     # Granted only from the server CLI (python -m app.cli make-admin), never through the API.
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # E-mail when one of the user's scans finishes (only if SMTP is configured).
+    notify_scan_done: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Access tokens issued before this instant are rejected (set on password reset).
+    password_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     domains: Mapped[list[Domain]] = relationship(
         back_populates="user", cascade="all, delete-orphan")
     scans: Mapped[list[Scan]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    reset_tokens: Mapped[list[PasswordResetToken]] = relationship(
+        back_populates="user", cascade="all, delete-orphan")
 
 
 class Domain(Base):
@@ -80,8 +87,24 @@ class Scan(Base):
     user: Mapped[User] = relationship(back_populates="scans")
 
 
+class PasswordResetToken(Base):
+    """Single-use, expiring password reset token. Only its SHA-256 hash is stored."""
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[User] = relationship(back_populates="reset_tokens")
+
+
 class AuditLog(Base):
-    """One row per scan request (CLAUDE.md rule 4) and per admin action on a domain.
+    """One row per scan request (CLAUDE.md rule 4), per admin action on a domain and per
+    sensitive account action (password reset, account deletion).
 
     Deliberately not a foreign key to users: the trail must survive account deletion.
     """
