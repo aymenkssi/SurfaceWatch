@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Loader2, Trash2 } from "lucide-react";
+import { KeyRound, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -40,18 +40,60 @@ function NotificationsCard() {
       <CardHeader>
         <CardTitle>Notifications par e-mail</CardTitle>
         <CardDescription>
-          {emailEnabled === false
-            ? "L'envoi d'e-mails n'est pas encore activé sur ce serveur."
-            : "Les e-mails contiennent seulement un lien : le rapport reste accessible après connexion."}
+          Les e-mails contiennent seulement un lien : le rapport reste accessible après connexion.
+          {emailEnabled === false &&
+            " L'envoi d'e-mails n'est pas encore activé sur ce serveur : votre choix est enregistré et s'appliquera dès son activation."}
         </CardDescription>
       </CardHeader>
       <CardContent>
         <label className="flex items-center gap-3 text-sm cursor-pointer">
           <input type="checkbox" className="h-4 w-4 accent-primary"
-                 checked={user.notify_scan_done} disabled={saving || !emailEnabled}
+                 checked={!!user.notify_scan_done} disabled={saving}
                  onChange={(e) => toggle(e.target.checked)} />
           M'avertir quand un scan est terminé ou a échoué
         </label>
+      </CardContent>
+    </Card>
+  );
+}
+
+function PasswordCard() {
+  const { user } = useAuth();
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState(false);
+
+  const sendResetLink = async () => {
+    setSending(true);
+    try {
+      await api.post("/auth/forgot-password", { email: user.email });
+      setSent(true);
+      toast.success(`Lien de réinitialisation envoyé à ${user.email}.`);
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <Card className="shadow-soft">
+      <CardHeader>
+        <CardTitle>Mot de passe</CardTitle>
+        <CardDescription>
+          Recevez par e-mail un lien pour choisir un nouveau mot de passe (valable une heure,
+          utilisable une fois). Vos sessions ouvertes seront fermées après le changement.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        <Button variant="outline" onClick={sendResetLink} disabled={sending}>
+          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <KeyRound className="h-4 w-4" />}
+          M'envoyer un lien de réinitialisation
+        </Button>
+        {sent && (
+          <p className="text-sm text-muted-foreground">
+            E-mail envoyé à {user.email}. Pensez à vérifier vos spams.
+          </p>
+        )}
       </CardContent>
     </Card>
   );
@@ -131,6 +173,7 @@ export default function Account() {
           <p><span className="text-muted-foreground">Inscrit le :</span> {formatDate(user.created_at)}</p>
         </CardContent>
       </Card>
+      <PasswordCard />
       <NotificationsCard />
       <DeleteAccountCard />
     </div>
