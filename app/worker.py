@@ -11,7 +11,7 @@ from datetime import timedelta
 
 from sqlalchemy import delete, select
 
-from app import mailer, scans
+from app import checks, mailer, scans
 from app.config import get_settings
 from app.db import SessionLocal, init_db
 from app.models import Domain, PasswordResetToken, Scan, utcnow
@@ -41,7 +41,14 @@ def execute_scan(scan_id: str) -> str:
         except Exception as exc:  # noqa: BLE001 - keep the job record consistent
             scan.status, scan.error = "failed", f"internal error: {type(exc).__name__}"
         else:
-            scan.events = result.events
+            events = list(result.events)
+            # Passive e-mail authentication checks (public DNS on the scanned domain).
+            try:
+                for finding in checks.mail_config_findings(scan.domain):
+                    events.append({"type": finding["type"], "data": finding})
+            except Exception:  # noqa: BLE001 - mail checks must never fail a scan
+                pass
+            scan.events = events
             scan.error = result.error
             scan.status = "done" if result.returncode == 0 else "failed"
         scan.finished_at = utcnow()

@@ -28,6 +28,9 @@ class Settings(BaseSettings):
     # Advanced level (active + brute-force): stricter, dedicated limits.
     advanced_scan_timeout_seconds: int = 3600
     advanced_max_scans_per_day: int = 1
+    # Deep level (active port scan): its own stricter quota and timeout.
+    deep_scan_timeout_seconds: int = 3600
+    deep_max_scans_per_day: int = 1
     retention_days: int = 30
     scans_dir: Path = Path("./data/scans")
     bbot_bin: str = "bbot"

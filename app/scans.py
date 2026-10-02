@@ -25,6 +25,7 @@ class ScanLevel(str, Enum):
     PASSIVE = "passive"
     STANDARD = "standard"  # active — requires a verified domain (v0.3)
     ADVANCED = "advanced"  # active + brute-force — verified domain AND explicit consent (v0.4)
+    DEEP = "deep"          # active port scan + service fingerprinting — verified AND consent
 
 
 # Server-side presets. NEVER build these from user input.
@@ -35,6 +36,11 @@ FORBIDDEN_FLAGS = ["loud", "invasive", "iis-shortnames", "web-heavy"]
 # modules flagged email-enum (sslcert, dnscaa, dnstlsrpt) are kept for their DNS results; the
 # e-mail addresses they emit are discarded in load_events().
 EXCLUDED_MODULES = ["hunterio"]
+
+# BBOT omits HTTP_RESPONSE from its output by default. We need it (headers only) to derive
+# security-header and advertised-version findings, so every active level overrides
+# omit_event_types to keep HTTP_RESPONSE while still dropping the other noisy types.
+_OMIT_EVENT_TYPES = "omit_event_types=[RAW_TEXT,URL_UNVERIFIED,DNS_NAME_UNRESOLVED,FILESYSTEM,WEB_PARAMETER]"
 
 # "advanced" adds surface-level brute-force on top of the standard web scan:
 #   - dnsbrute: subdomain name brute-force (needs massdns in the worker image)
@@ -48,28 +54,45 @@ EXCLUDED_MODULES = ["hunterio"]
 ADVANCED_BRUTE_MODULES = ["dnsbrute", "webbrute"]
 ADVANCED_FORBIDDEN_FLAGS = ["invasive", "iis-shortnames", "web-heavy", "web-paramminer"]
 
+# "deep" adds a real port scan (masscan, via the portscan module) and service fingerprinting
+# (fingerprintx) to find exposed services. masscan is "loud", so we cannot exclude the loud
+# flag here; instead we forbid the same aggressive flags as advanced. nuclei (active vuln
+# probing) stays excluded via the invasive flag. The preset stays server-side.
+DEEP_MODULES = ["portscan", "fingerprintx"]
+DEEP_FORBIDDEN_FLAGS = ["invasive", "iis-shortnames", "web-heavy", "web-paramminer"]
+
 LEVEL_ARGS: dict[ScanLevel, list[str]] = {
     ScanLevel.PASSIVE: ["-p", "subdomain-enum", "-rf", "passive", "-em", *EXCLUDED_MODULES],
     ScanLevel.STANDARD: ["-p", "subdomain-enum", "web", "-ef", *FORBIDDEN_FLAGS,
-                         "-em", *EXCLUDED_MODULES],
+                         "-em", *EXCLUDED_MODULES, "-c", _OMIT_EVENT_TYPES],
     ScanLevel.ADVANCED: ["-p", "subdomain-enum", "web", "-m", *ADVANCED_BRUTE_MODULES,
-                         "-ef", *ADVANCED_FORBIDDEN_FLAGS, "-em", *EXCLUDED_MODULES],
+                         "-ef", *ADVANCED_FORBIDDEN_FLAGS, "-em", *EXCLUDED_MODULES,
+                         "-c", _OMIT_EVENT_TYPES],
+    ScanLevel.DEEP: ["-p", "subdomain-enum", "web", "-m", *DEEP_MODULES,
+                     "-ef", *DEEP_FORBIDDEN_FLAGS, "-em", *EXCLUDED_MODULES,
+                     "-c", _OMIT_EVENT_TYPES,
+                     "-c", "modules.portscan.top_ports=100",
+                     "-c", "modules.portscan.rate=300"],
 }
 
 # Levels that send active traffic to the target: a verified domain is mandatory.
-ACTIVE_LEVELS = frozenset({ScanLevel.STANDARD, ScanLevel.ADVANCED})
+ACTIVE_LEVELS = frozenset({ScanLevel.STANDARD, ScanLevel.ADVANCED, ScanLevel.DEEP})
 # Levels aggressive enough to require explicit, logged user consent.
-CONSENT_LEVELS = frozenset({ScanLevel.ADVANCED})
+CONSENT_LEVELS = frozenset({ScanLevel.ADVANCED, ScanLevel.DEEP})
 
 
 def timeout_for(level: ScanLevel) -> int:
     settings = get_settings()
     if level is ScanLevel.ADVANCED:
         return settings.advanced_scan_timeout_seconds
+    if level is ScanLevel.DEEP:
+        return settings.deep_scan_timeout_seconds
     return settings.scan_timeout_seconds
 
 # Personal data BBOT may emit: never stored, never shown in reports.
 PERSONAL_DATA_EVENTS = {"EMAIL_ADDRESS", "USERNAME", "PASSWORD", "HASHED_PASSWORD"}
+# HTTP_RESPONSE carries the full page body; keep only the light metadata we analyse.
+_HTTP_RESPONSE_KEEP = {"url", "input", "host", "status_code", "title", "header"}
 
 
 class ScanNotAllowed(PermissionError):
@@ -166,8 +189,12 @@ def load_events(path: Path) -> list[dict]:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(event, dict) and event.get("type") not in PERSONAL_DATA_EVENTS:
-                events.append(event)
+            if not isinstance(event, dict) or event.get("type") in PERSONAL_DATA_EVENTS:
+                continue
+            # Drop the heavy body/raw_header from HTTP responses: we only analyse headers.
+            if event.get("type") == "HTTP_RESPONSE" and isinstance(event.get("data"), dict):
+                event["data"] = {k: v for k, v in event["data"].items() if k in _HTTP_RESPONSE_KEEP}
+            events.append(event)
     return events
 
 

@@ -78,7 +78,7 @@ class DomainIn(BaseModel):
 class ScanIn(BaseModel):
     domain_id: str
     level: scans.ScanLevel = scans.ScanLevel.PASSIVE
-    # Explicit opt-in required for aggressive levels (advanced brute-force).
+    # Explicit opt-in required for active-probing levels (advanced brute-force, deep port scan).
     consent: bool = False
 
 
@@ -350,10 +350,10 @@ def start_scan(body: ScanIn, request: Request, user: User = Depends(get_current_
     if body.level in scans.ACTIVE_LEVELS and not d.verified:
         raise HTTPException(status_code=403, detail="active scans require a verified domain")
 
-    # Advanced brute-force requires an explicit, logged opt-in on top of ownership proof.
+    # Levels that actively probe the target require an explicit, logged opt-in.
     if body.level in scans.CONSENT_LEVELS and not body.consent:
         raise HTTPException(status_code=403,
-                            detail="advanced scans require explicit consent to brute-force testing")
+                            detail="this level requires explicit consent to actively test the target")
 
     # Rule 2 + SPEC guardrails: one scan at a time, plus a per-level daily quota.
     if _count_scans(db, user, Scan.status.in_(ACTIVE_STATUSES)) >= settings.max_concurrent_scans_per_user:
@@ -361,6 +361,9 @@ def start_scan(body: ScanIn, request: Request, user: User = Depends(get_current_
     since: datetime = utcnow() - timedelta(days=1)
     if body.level is scans.ScanLevel.ADVANCED:
         daily_limit = settings.advanced_max_scans_per_day
+        used = _count_scans(db, user, Scan.created_at >= since, Scan.level == body.level.value)
+    elif body.level is scans.ScanLevel.DEEP:
+        daily_limit = settings.deep_max_scans_per_day
         used = _count_scans(db, user, Scan.created_at >= since, Scan.level == body.level.value)
     else:
         daily_limit = settings.max_scans_per_day

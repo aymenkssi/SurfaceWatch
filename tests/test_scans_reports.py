@@ -1,3 +1,4 @@
+from app import scans
 from app.reports import build_report, render_html
 from app.scans import LEVEL_ARGS, ScanLevel, ScanNotAllowed, build_command, run_scan
 
@@ -86,6 +87,31 @@ def test_run_scan_reads_events_then_deletes_bbot_output(tmp_path, monkeypatch):
     assert list((tmp_path / "scans").iterdir()) == []
 
 
+def test_standard_level_keeps_http_response_in_output():
+    """HTTP_RESPONSE is omitted by BBOT by default; the active level must re-include it
+    (we need the headers) while still dropping the other noisy types."""
+    args = LEVEL_ARGS[ScanLevel.STANDARD]
+    cfg = args[args.index("-c") + 1]
+    assert cfg.startswith("omit_event_types=")
+    assert "HTTP_RESPONSE" not in cfg
+    assert "RAW_TEXT" in cfg
+
+
+def test_load_events_strips_http_response_body(tmp_path):
+    from app.scans import load_events
+    import json
+
+    path = tmp_path / "output.json"
+    path.write_text(json.dumps({
+        "type": "HTTP_RESPONSE",
+        "data": {"url": "https://x/", "host": "x", "header": {"server": "nginx"},
+                 "body": "secret page body", "raw_header": "HTTP/1.1 200"},
+    }) + "\n")
+    events = load_events(path)
+    assert events[0]["data"].get("body") is None
+    assert events[0]["data"]["header"] == {"server": "nginx"}
+
+
 def test_email_harvesting_module_is_excluded_at_every_level():
     for args in LEVEL_ARGS.values():
         assert "hunterio" in args[args.index("-em") + 1:]
@@ -112,3 +138,35 @@ def test_advanced_level_uses_a_longer_timeout():
     s = get_settings()
     assert timeout_for(ScanLevel.ADVANCED) == s.advanced_scan_timeout_seconds
     assert timeout_for(ScanLevel.PASSIVE) == s.scan_timeout_seconds
+
+
+def test_deep_level_enables_portscan_and_fingerprintx():
+    args = LEVEL_ARGS[ScanLevel.DEEP]
+    modules = set(args[args.index("-m") + 1:args.index("-ef")])
+    assert {"portscan", "fingerprintx"} <= modules
+    # Deep allows the loud flag (portscan is loud) but still forbids the aggressive ones.
+    excluded = set(args[args.index("-ef") + 1:args.index("-em")])
+    assert {"invasive", "iis-shortnames", "web-heavy", "web-paramminer"} <= excluded
+    assert "loud" not in excluded
+
+
+def test_deep_level_is_active_and_consent_gated():
+    assert ScanLevel.DEEP in scans.ACTIVE_LEVELS
+    assert ScanLevel.DEEP in scans.CONSENT_LEVELS
+
+
+def test_deep_scan_requires_verification():
+    with pytest.raises(ScanNotAllowed):
+        run_scan("example.fr", "deep", domain_verified=False)
+
+
+def test_build_report_surfaces_services():
+    events = [
+        {"type": "OPEN_TCP_PORT", "data": "mail.example.fr:25"},
+        {"type": "PROTOCOL", "data": {"host": "mail.example.fr", "port": 25, "protocol": "SMTP"}},
+        {"type": "OPEN_TCP_PORT", "data": "www.example.fr:443"},
+    ]
+    report = build_report("example.fr", "deep", events)
+    by_host = {(s["host"], s["port"]): s["protocol"] for s in report.services}
+    assert by_host[("mail.example.fr", 25)] == "SMTP"
+    assert ("www.example.fr", 443) in by_host

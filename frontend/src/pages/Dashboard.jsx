@@ -57,10 +57,10 @@ export default function Dashboard() {
     }
   };
 
-  const startScan = async (domain, level) => {
+  const startScan = async (domain, level, consent = false) => {
     setStarting(true);
     try {
-      const res = await api.post("/scans", { domain_id: domain.id, level });
+      const res = await api.post("/scans", { domain_id: domain.id, level, consent });
       toast.success(`Scan ${LEVELS[level].label.toLowerCase()} de ${domain.name} lancé.`);
       navigate(`/scans/${res.data.id}`);
     } catch (err) {
