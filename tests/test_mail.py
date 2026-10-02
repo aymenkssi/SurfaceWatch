@@ -42,7 +42,7 @@ def _register(client) -> tuple[str, dict]:
 
 
 def _token_from(msg) -> str:
-    return re.search(r"reset-password\?token=(\S+)", msg.get_content()).group(1)
+    return re.search(r"reset-password\?token=(\S+)", msg.get_body(("plain",)).get_content()).group(1)
 
 
 def test_email_features_disabled_without_smtp(client):
@@ -58,7 +58,7 @@ def test_password_reset_flow(client, outbox):
     assert client.post("/api/auth/forgot-password", json={"email": email.upper()}).status_code == 202
     assert len(outbox) == 1 and outbox[0]["To"] == email
     token = _token_from(outbox[0])
-    assert "https://app.example.test/reset-password?token=" in outbox[0].get_content()
+    assert "https://app.example.test/reset-password?token=" in outbox[0].get_body(("plain",)).get_content()
 
     r = client.post("/api/auth/reset-password", json={"token": token, "password": "a brand new password"})
     assert r.status_code == 204
@@ -118,7 +118,7 @@ def test_scan_finished_notification_and_opt_out(client, outbox, monkeypatch):
     assert worker.execute_scan(scan_id) == "done"
     assert outbox[-1]["To"] == email
     assert "Scan terminé : example.fr" in outbox[-1]["Subject"]
-    assert f"https://app.example.test/scans/{scan_id}" in outbox[-1].get_content()
+    assert f"https://app.example.test/scans/{scan_id}" in outbox[-1].get_body(("plain",)).get_content()
 
     r = client.patch("/api/users/me", json={"notify_scan_done": False}, headers=h)
     assert r.json()["notify_scan_done"] is False
@@ -210,7 +210,7 @@ def test_admin_smtp_config_overrides_env_and_hides_secret(client, admin_smtp):
     # Links use the admin-configured public URL.
     user_email, _ = _register(client)
     client.post("/api/auth/forgot-password", json={"email": user_email})
-    assert "https://app.example.test/reset-password?token=" in sent[-1].get_content()
+    assert "https://app.example.test/reset-password?token=" in sent[-1].get_body(("plain",)).get_content()
     assert "<noreply@example.com>" in sent[-1]["From"]
 
     # Omitting the password keeps it; clear_password removes it.
@@ -257,3 +257,14 @@ def test_unreadable_password_after_secret_key_change(client, admin_smtp, monkeyp
     monkeypatch.setattr(get_settings(), "secret_key", "another-secret-key-of-sufficient-length")
     assert mailer.get_config().password == ""
     monkeypatch.undo()
+
+
+def test_messages_have_date_and_html_alternative(client, outbox):
+    email, _ = _register(client)
+    client.post("/api/auth/forgot-password", json={"email": email})
+    msg = outbox[-1]
+    assert msg["Date"]
+    html_part = msg.get_body(("html",)).get_content()
+    token = _token_from(msg)
+    assert f'<a href="https://app.example.test/reset-password?token={token}">' in html_part
+    assert "<script" not in html_part
