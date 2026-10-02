@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     # web-probe and service-fingerprint phases finish (otherwise URLs/versions are lost).
     deep_scan_timeout_seconds: int = 7200
     deep_max_scans_per_day: int = 1
+    # Extra RQ budget beyond the scan subprocess: the worker still runs the mail checks,
+    # the CISA KEV / NVD vulnerability lookups and the retention purge after BBOT returns.
+    # The RQ job timeout must clear the longest per-level subprocess timeout plus this.
+    scan_post_processing_seconds: int = 600
     retention_days: int = 30
     scans_dir: Path = Path("./data/scans")
     bbot_bin: str = "bbot"
