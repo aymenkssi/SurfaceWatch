@@ -89,6 +89,11 @@ def timeout_for(level: ScanLevel) -> int:
         return settings.deep_scan_timeout_seconds
     return settings.scan_timeout_seconds
 
+
+def max_timeout() -> int:
+    """Largest per-level subprocess timeout. The RQ job must outlast this (see api.enqueue_scan)."""
+    return max(timeout_for(level) for level in ScanLevel)
+
 # Personal data BBOT may emit: never stored, never shown in reports.
 PERSONAL_DATA_EVENTS = {"EMAIL_ADDRESS", "USERNAME", "PASSWORD", "HASHED_PASSWORD"}
 # HTTP_RESPONSE carries the full page body; keep only the light metadata we analyse.

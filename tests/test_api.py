@@ -418,3 +418,33 @@ def test_admin_stats(client, queued):
     assert stats["scans"]["requested_24h"] >= 1 and stats["scans"]["by_level"]["passive"] >= 1
     assert stats["scans"]["active"] >= 1
     assert len(stats["scans"]["per_day"]) == 30 and stats["scans"]["per_day"][-1]["count"] >= 1
+
+
+def test_enqueue_job_timeout_clears_longest_scan(monkeypatch):
+    """Regression: the RQ job timeout must outlast the longest per-level subprocess timeout
+    (deep) plus post-processing, so RQ never kills a running scan with JobTimeoutException."""
+    import redis
+    import rq
+
+    captured = {}
+
+    class FakeJob:
+        id = "job-xyz"
+
+    class FakeQueue:
+        def __init__(self, *a, **k):
+            pass
+
+        def enqueue(self, func, scan_id, job_timeout=None):
+            captured["job_timeout"] = job_timeout
+            return FakeJob()
+
+    monkeypatch.setattr(redis.Redis, "from_url", classmethod(lambda cls, url: object()))
+    monkeypatch.setattr(rq, "Queue", FakeQueue)
+
+    assert api.enqueue_scan("sw_1") == "job-xyz"
+    # Clears every level's subprocess timeout, deep included, with post-processing headroom.
+    assert captured["job_timeout"] == scans.max_timeout() + \
+        api.get_settings().scan_post_processing_seconds
+    for level in scans.ScanLevel:
+        assert captured["job_timeout"] > scans.timeout_for(level)

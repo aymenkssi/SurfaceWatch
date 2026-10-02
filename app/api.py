@@ -37,8 +37,10 @@ def enqueue_scan(scan_id: str) -> str:
 
     settings = get_settings()
     queue = Queue("scans", connection=Redis.from_url(settings.redis_url))
-    # RQ ceiling must clear the longest per-level hard timeout (enforced in scans.run_scan).
-    job_timeout = max(settings.scan_timeout_seconds, settings.advanced_scan_timeout_seconds) + 60
+    # RQ ceiling must clear the longest per-level hard timeout (enforced in scans.run_scan)
+    # PLUS the worker's post-processing (mail checks, KEV/NVD vuln lookups, purge) that runs
+    # after BBOT returns. Otherwise RQ kills the job with JobTimeoutException before it finishes.
+    job_timeout = scans.max_timeout() + settings.scan_post_processing_seconds
     job = queue.enqueue("app.worker.execute_scan", scan_id, job_timeout=job_timeout)
     return job.id
 
