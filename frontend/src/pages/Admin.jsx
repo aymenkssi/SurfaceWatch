@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Clock, Loader2, Mail, RefreshCw, Search, ShieldCheck, Undo2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { CheckCircle2, Clock, ImageUp, Loader2, Mail, RefreshCw, Search, ShieldCheck, Trash2, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -10,6 +10,7 @@ import { ScanStatusBadge } from "@/components/ScanStatusBadge";
 import { SmtpSettingsCard } from "@/components/SmtpSettingsCard";
 import { api, errorMessage } from "@/lib/api";
 import { formatDate, LEVELS } from "@/lib/format";
+import { fileToDataUri } from "@/lib/logo";
 
 // Derived from the shared level list so a new scan level shows up here automatically.
 const LEVEL_LABELS = Object.fromEntries(
@@ -92,6 +93,122 @@ function Breakdown({ title, counts, labels }) {
         })}
       </div>
     </div>
+  );
+}
+
+function BrandingCard() {
+  const [siteName, setSiteName] = useState("");
+  const [accent, setAccent] = useState("#2563eb");
+  const [logo, setLogo] = useState(null);      // currently stored / preview
+  const [pendingLogo, setPendingLogo] = useState(null);  // new upload to send
+  const [removeLogo, setRemoveLogo] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    api.get("/admin/branding").then((res) => {
+      setSiteName(res.data.site_name || "");
+      setAccent(res.data.accent || "#2563eb");
+      setLogo(res.data.site_logo || null);
+      setLoaded(true);
+    }).catch(() => setLoaded(true));
+  }, []);
+
+  const pickLogo = async (file) => {
+    if (!file) return;
+    try {
+      const uri = await fileToDataUri(file);
+      setPendingLogo(uri);
+      setLogo(uri);
+      setRemoveLogo(false);
+    } catch (err) {
+      toast.error(err.message);
+    } finally {
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  const clearLogo = () => { setLogo(null); setPendingLogo(null); setRemoveLogo(true); };
+
+  const save = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const res = await api.put("/admin/branding", {
+        site_name: siteName.trim(), accent_color: accent,
+        logo: pendingLogo || null, remove_logo: removeLogo,
+      });
+      setLogo(res.data.site_logo || null);
+      setPendingLogo(null);
+      setRemoveLogo(false);
+      toast.success("Identité visuelle enregistrée.");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card className="shadow-soft">
+      <CardHeader>
+        <CardTitle className="text-base">Identité visuelle du rapport</CardTitle>
+        <CardDescription>
+          Le logo du site s'affiche en haut à droite de chaque rapport (le client place le sien à
+          gauche depuis son compte). PNG, JPEG, WebP, SVG ou GIF, 256 Ko max.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {!loaded ? (
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        ) : (
+          <form onSubmit={save} className="space-y-4 max-w-xl">
+            <div className="grid sm:grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <label className="text-sm font-medium">Nom du site</label>
+                <Input value={siteName} onChange={(e) => setSiteName(e.target.value)}
+                       placeholder="SurfaceAttackWatch" required maxLength={100} />
+              </div>
+              <div className="space-y-1">
+                <label className="text-sm font-medium">Couleur d'accent</label>
+                <div className="flex items-center gap-2">
+                  <input type="color" value={accent} onChange={(e) => setAccent(e.target.value)}
+                         className="h-9 w-12 rounded border bg-background p-1" />
+                  <Input value={accent} onChange={(e) => setAccent(e.target.value)}
+                         className="font-mono" maxLength={7} />
+                </div>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium">Logo du site</label>
+              <div className="flex flex-wrap items-center gap-3">
+                {logo && (
+                  <img src={logo} alt="Logo du site"
+                       className="max-h-14 max-w-[200px] object-contain rounded border bg-white p-2" />
+                )}
+                <input ref={inputRef} type="file" className="hidden"
+                       accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
+                       onChange={(e) => pickLogo(e.target.files?.[0])} />
+                <Button type="button" variant="outline" onClick={() => inputRef.current?.click()}>
+                  <ImageUp className="h-4 w-4" /> {logo ? "Remplacer" : "Téléverser"}
+                </Button>
+                {logo && (
+                  <Button type="button" variant="ghost" className="text-destructive hover:text-destructive"
+                          onClick={clearLogo}>
+                    <Trash2 className="h-4 w-4" /> Retirer
+                  </Button>
+                )}
+              </div>
+            </div>
+            <Button type="submit" disabled={saving || !siteName.trim()}>
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle2 className="h-4 w-4" />}
+              Enregistrer
+            </Button>
+          </form>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -269,6 +386,7 @@ export default function Admin() {
       </div>
 
       <SmtpSettingsCard />
+      <BrandingCard />
 
       <div className="grid lg:grid-cols-3 gap-4">
         <Card className="shadow-soft lg:col-span-2">

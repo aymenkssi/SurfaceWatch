@@ -39,7 +39,8 @@ _LATE_COLUMNS = {
     "users": {"is_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
               "notify_scan_done": "BOOLEAN NOT NULL DEFAULT TRUE",
               "password_changed_at": "TIMESTAMP WITH TIME ZONE",
-              "scan_quota_reset_at": "TIMESTAMP WITH TIME ZONE"},
+              "scan_quota_reset_at": "TIMESTAMP WITH TIME ZONE",
+              "logo_data_uri": "TEXT"},
     "domains": {"verification_method": "VARCHAR(10)", "verified_by": "VARCHAR(32)"},
     "audit_log": {"details": "TEXT"},
 }

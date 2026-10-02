@@ -15,13 +15,14 @@ from sqlalchemy import func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app import branding as branding_mod
 from app import crypto, domains, mailer, reports, scans
 from app.auth import (create_access_token, get_current_admin, get_current_user, hash_password,
                       verify_password)
 from app.config import get_settings
 from app.db import get_db
-from app.models import (AuditLog, Domain, PasswordResetToken, Scan, SmtpSettings, User, as_utc,
-                        utcnow)
+from app.models import (AuditLog, Branding, Domain, PasswordResetToken, Scan, SmtpSettings, User,
+                        as_utc, utcnow)
 
 router = APIRouter(prefix="/api")
 
@@ -70,6 +71,11 @@ class PreferencesIn(BaseModel):
     notify_scan_done: bool
 
 
+class LogoIn(BaseModel):
+    # A small base64 image data URI, shown on the user's reports.
+    logo: str = Field(max_length=400_000)
+
+
 class DomainIn(BaseModel):
     domain: str = Field(max_length=300)
     renew: bool = False  # issue a new token even if the current one is still valid
@@ -84,7 +90,8 @@ class ScanIn(BaseModel):
 
 def _user_out(user: User) -> dict:
     return {"id": user.id, "email": user.email, "is_admin": user.is_admin,
-            "notify_scan_done": user.notify_scan_done, "created_at": user.created_at}
+            "notify_scan_done": user.notify_scan_done, "logo_data_uri": user.logo_data_uri,
+            "created_at": user.created_at}
 
 
 def _domain_out(d: Domain) -> dict:
@@ -163,6 +170,12 @@ def features() -> dict:
     return {"email": mailer.enabled()}
 
 
+@router.get("/branding")
+def public_branding(db: Session = Depends(get_db)) -> dict:
+    """Site name, logo and accent colour (shown on reports and in the app shell)."""
+    return branding_mod.load_branding(db)
+
+
 @router.post("/auth/forgot-password", status_code=status.HTTP_202_ACCEPTED)
 def forgot_password(body: ForgotPasswordIn, request: Request, db: Session = Depends(get_db)) -> dict:
     """Mail a single-use reset link. Same answer whether the account exists or not."""
@@ -223,6 +236,26 @@ def me(user: User = Depends(get_current_user)) -> dict:
 def update_preferences(body: PreferencesIn, user: User = Depends(get_current_user),
                        db: Session = Depends(get_db)) -> dict:
     user.notify_scan_done = body.notify_scan_done
+    db.commit()
+    return _user_out(user)
+
+
+@router.put("/users/me/logo")
+def set_my_logo(body: LogoIn, user: User = Depends(get_current_user),
+                db: Session = Depends(get_db)) -> dict:
+    """Upload the customer's own logo (shown top-left on their reports)."""
+    try:
+        user.logo_data_uri = branding_mod.validate_logo(body.logo)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    db.commit()
+    return _user_out(user)
+
+
+@router.delete("/users/me/logo")
+def delete_my_logo(user: User = Depends(get_current_user),
+                   db: Session = Depends(get_db)) -> dict:
+    user.logo_data_uri = None
     db.commit()
     return _user_out(user)
 
@@ -427,10 +460,16 @@ def scan_report(scan_id: str, user: User = Depends(get_current_user),
     return reports.report_to_dict(_build_report(db, user, scan_id))
 
 
+def _report_branding(db: Session, user: User) -> dict:
+    """Site branding (admin) plus this user's own logo, for the report header."""
+    return {**branding_mod.load_branding(db), "client_logo": user.logo_data_uri}
+
+
 @router.get("/scans/{scan_id}/report.html", response_class=HTMLResponse)
 def scan_report_html(scan_id: str, user: User = Depends(get_current_user),
                      db: Session = Depends(get_db)):
-    return HTMLResponse(reports.render_html(_build_report(db, user, scan_id)))
+    report = _build_report(db, user, scan_id)
+    return HTMLResponse(reports.render_html(report, _report_branding(db, user)))
 
 
 @router.get("/scans/{scan_id}/report.pdf")
@@ -438,7 +477,7 @@ def scan_report_pdf(scan_id: str, user: User = Depends(get_current_user),
                     db: Session = Depends(get_db)):
     report = _build_report(db, user, scan_id)
     try:
-        pdf = reports.render_pdf(report)
+        pdf = reports.render_pdf(report, _report_branding(db, user))
     except RuntimeError as exc:
         raise HTTPException(status_code=501, detail=str(exc)) from exc
     return Response(pdf, media_type="application/pdf",
@@ -455,6 +494,13 @@ class ManualVerifyIn(BaseModel):
 
 class ResetQuotaIn(BaseModel):
     email: EmailStr
+
+
+class BrandingIn(BaseModel):
+    site_name: str = Field(min_length=1, max_length=100)
+    accent_color: str = "#2563eb"
+    logo: str | None = Field(default=None, max_length=400_000)  # new logo, or keep the current one
+    remove_logo: bool = False
 
 
 def _admin_domain_out(d: Domain) -> dict:
@@ -610,6 +656,41 @@ def admin_reset_quota(body: ResetQuotaIn, request: Request,
                     details=f"target={user.email}"))
     db.commit()
     return {"email": user.email, "reset_at": as_utc(user.scan_quota_reset_at)}
+
+
+@router.get("/admin/branding")
+def admin_get_branding(_: User = Depends(get_current_admin), db: Session = Depends(get_db)) -> dict:
+    return branding_mod.load_branding(db)
+
+
+@router.put("/admin/branding")
+def admin_update_branding(body: BrandingIn, request: Request,
+                          admin: User = Depends(get_current_admin),
+                          db: Session = Depends(get_db)) -> dict:
+    """Configure the site branding shown on every report (right-hand logo, name, accent)."""
+    try:
+        accent = branding_mod.validate_accent(body.accent_color)
+        logo = branding_mod.validate_logo(body.logo) if body.logo else None
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    row = db.get(Branding, 1)
+    if row is None:
+        row = Branding(id=1)
+        db.add(row)
+    row.site_name = body.site_name.strip()
+    row.accent_color = accent
+    if body.remove_logo:
+        row.logo_data_uri = None
+    elif logo is not None:
+        row.logo_data_uri = logo
+    row.updated_at = utcnow()
+    row.updated_by = admin.email
+    db.add(AuditLog(user_id=admin.id, user_email=admin.email, action="branding.update",
+                    domain="", source_ip=_client_ip(request),
+                    details=f"site_name={row.site_name}; logo={'set' if row.logo_data_uri else 'none'}"))
+    db.commit()
+    return branding_mod.load_branding(db)
 
 
 @router.get("/admin/audit")
