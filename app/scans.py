@@ -97,7 +97,25 @@ def build_command(domain: str, level: ScanLevel, scan_id: str, output_dir: Path)
         "-o", str(output_dir),
         "-n", scan_id,
         "-y",  # non-interactive
+        # Never install dependencies at scan time: the worker runs unprivileged (no root, no
+        # sudo) and BBOT's installer would abort the scan. They are installed at image build
+        # time by install_deps() below.
+        "--no-deps",
     ]
+
+
+def install_deps_command(level: ScanLevel) -> list[str]:
+    """Dry run with no target: BBOT installs the level's module dependencies, scans nothing."""
+    return [get_settings().bbot_bin, *LEVEL_ARGS[level], "-y", "--dry-run"]
+
+
+def install_deps() -> int:
+    """Install BBOT dependencies for every level. Run at image build time, as the worker user."""
+    for level in ScanLevel:
+        rc = subprocess.run(install_deps_command(level), check=False).returncode
+        if rc != 0:
+            return rc
+    return 0
 
 
 def run_scan(raw_domain: str, level: str, domain_verified: bool) -> ScanResult:
@@ -151,3 +169,11 @@ def load_events(path: Path) -> list[dict]:
             if isinstance(event, dict) and event.get("type") not in PERSONAL_DATA_EVENTS:
                 events.append(event)
     return events
+
+
+if __name__ == "__main__":
+    import sys
+
+    if sys.argv[1:] != ["install-deps"]:
+        sys.exit("usage: python -m app.scans install-deps")
+    sys.exit(install_deps())
