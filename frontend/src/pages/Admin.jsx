@@ -9,9 +9,11 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { ScanStatusBadge } from "@/components/ScanStatusBadge";
 import { SmtpSettingsCard } from "@/components/SmtpSettingsCard";
 import { api, errorMessage } from "@/lib/api";
-import { formatDate } from "@/lib/format";
+import { formatDate, LEVELS } from "@/lib/format";
 
-const LEVEL_LABELS = { passive: "Passif", standard: "Standard", advanced: "Avancé" };
+// Derived from the shared level list so a new scan level shows up here automatically.
+const LEVEL_LABELS = Object.fromEntries(
+  Object.entries(LEVELS).map(([key, { label }]) => [key, label]));
 const STATUS_LABELS = { queued: "En file", running: "En cours", done: "Terminés", failed: "Échecs" };
 const ACTION_LABELS = {
   "scan.requested": "Scan demandé",
@@ -20,6 +22,7 @@ const ACTION_LABELS = {
   "smtp.update": "Config. e-mail modifiée",
   "smtp.reset": "Config. e-mail supprimée",
   "smtp.test": "E-mail de test",
+  "user.quota_reset": "Quota réinitialisé",
 };
 const DOMAIN_FILTERS = { pending: "Non vérifiés", verified: "Vérifiés", all: "Tous" };
 
@@ -89,6 +92,48 @@ function Breakdown({ title, counts, labels }) {
         })}
       </div>
     </div>
+  );
+}
+
+function QuotaResetCard() {
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setBusy(true);
+    try {
+      const res = await api.post("/admin/users/reset-quota", { email: email.trim() });
+      toast.success(`Quota réinitialisé pour ${res.data.email}.`);
+      setEmail("");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="shadow-soft">
+      <CardHeader>
+        <CardTitle className="text-base">Quota de scans</CardTitle>
+        <CardDescription>
+          Réinitialise le quota journalier d'un utilisateur : ses scans déjà effectués ne comptent
+          plus dans la limite, il peut relancer un scan immédiatement. Action journalisée.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <form className="flex flex-wrap gap-2" onSubmit={submit}>
+          <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)}
+            placeholder="E-mail de l'utilisateur" className="flex-1 min-w-[220px]" />
+          <Button type="submit" disabled={busy || !email.trim()}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            Réinitialiser le quota
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -284,6 +329,8 @@ export default function Admin() {
           </div>
         </CardContent>
       </Card>
+
+      <QuotaResetCard />
 
       <Card className="shadow-soft">
         <CardHeader><CardTitle className="text-base">Scans en cours</CardTitle></CardHeader>

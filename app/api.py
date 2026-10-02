@@ -359,6 +359,10 @@ def start_scan(body: ScanIn, request: Request, user: User = Depends(get_current_
     if _count_scans(db, user, Scan.status.in_(ACTIVE_STATUSES)) >= settings.max_concurrent_scans_per_user:
         raise HTTPException(status_code=429, detail="a scan is already running")
     since: datetime = utcnow() - timedelta(days=1)
+    # An admin quota reset raises the floor: scans before it no longer count.
+    reset_at = as_utc(user.scan_quota_reset_at)
+    if reset_at is not None and reset_at > since:
+        since = reset_at
     if body.level is scans.ScanLevel.ADVANCED:
         daily_limit = settings.advanced_max_scans_per_day
         used = _count_scans(db, user, Scan.created_at >= since, Scan.level == body.level.value)
@@ -447,6 +451,10 @@ def scan_report_pdf(scan_id: str, user: User = Depends(get_current_user),
 class ManualVerifyIn(BaseModel):
     # Why ownership was accepted without the TXT record (kept in the audit log).
     reason: str = Field(min_length=5, max_length=500)
+
+
+class ResetQuotaIn(BaseModel):
+    email: EmailStr
 
 
 def _admin_domain_out(d: Domain) -> dict:
@@ -586,6 +594,22 @@ def admin_revoke_domain(domain_id: str, request: Request,
                     details=f"owner={d.user.email}; previous={previous}"))
     db.commit()
     return _admin_domain_out(d)
+
+
+@router.post("/admin/users/reset-quota")
+def admin_reset_quota(body: ResetQuotaIn, request: Request,
+                      admin: User = Depends(get_current_admin),
+                      db: Session = Depends(get_db)) -> dict:
+    """Reset a user's daily scan quota: scans before now stop counting toward the limit."""
+    user = db.scalar(select(User).where(User.email == body.email.lower()))
+    if user is None:
+        raise HTTPException(status_code=404, detail="unknown user")
+    user.scan_quota_reset_at = utcnow()
+    db.add(AuditLog(user_id=admin.id, user_email=admin.email, action="user.quota_reset",
+                    domain="", source_ip=_client_ip(request),
+                    details=f"target={user.email}"))
+    db.commit()
+    return {"email": user.email, "reset_at": as_utc(user.scan_quota_reset_at)}
 
 
 @router.get("/admin/audit")
