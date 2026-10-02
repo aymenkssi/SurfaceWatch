@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { AlertTriangle, ArrowLeft, Download, FileCode, Loader2, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, Circle, Download, FileCode, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { isActive, ScanStatusBadge } from "@/components/ScanStatusBadge";
 import { api, downloadFile, errorMessage } from "@/lib/api";
 import { formatDate, LEVELS } from "@/lib/format";
-import { countByCategory, healthScores } from "@/lib/risk";
+import { countByCategory, healthScores, remediationActions, topHosts } from "@/lib/risk";
 import { cn } from "@/lib/utils";
 
 const POLL_MS = 5000;
@@ -74,6 +74,138 @@ const SEVERITY_CLASS = {
   INFO: "bg-muted text-muted-foreground",
 };
 
+const SEVERITY_LABEL = {
+  CRITICAL: "Critique", HIGH: "Élevé", MEDIUM: "Moyen", LOW: "Faible", INFO: "Info",
+};
+
+// Dot colours for a host's per-severity breakdown.
+const SEVERITY_DOT = {
+  CRITICAL: "#b91c1c", HIGH: "#ea580c", MEDIUM: "#ca8a04", LOW: "#15803d", INFO: "#6b7280",
+};
+
+function TopHostsCard({ findings }) {
+  const hosts = topHosts(findings);
+  if (hosts.length === 0) return null;
+  return (
+    <Card className="shadow-soft">
+      <CardHeader>
+        <CardTitle>Top hôtes à risque</CardTitle>
+        <CardDescription>Les hôtes portant les risques les plus sévères, en premier.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Hôte</TableHead>
+              <TableHead className="text-right">Risques</TableHead>
+              <TableHead>Répartition</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {hosts.map((h) => (
+              <TableRow key={h.host}>
+                <TableCell className="font-medium break-all">{h.host}</TableCell>
+                <TableCell className="text-right tabular-nums font-semibold">{h.total}</TableCell>
+                <TableCell>
+                  <div className="flex flex-wrap gap-1.5">
+                    {SEVERITY_TILES.map(({ key }) => (
+                      h.counts[key] ? (
+                        <span key={key} className="inline-flex items-center gap-1 text-xs tabular-nums"
+                              style={{ color: SEVERITY_DOT[key] }}>
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: SEVERITY_DOT[key] }} />
+                          {h.counts[key]}
+                        </span>
+                      ) : null
+                    ))}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+// Per-viewer "handled" state for the remediation checklist, kept in localStorage per scan.
+function useDoneSet(scanId) {
+  const key = `sw-actions-done:${scanId}`;
+  const [done, setDone] = useState(() => {
+    try {
+      const raw = localStorage.getItem(key);
+      return new Set(raw ? JSON.parse(raw) : []);
+    } catch {
+      return new Set();
+    }
+  });
+  const toggle = useCallback((id) => {
+    setDone((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      try { localStorage.setItem(key, JSON.stringify([...next])); } catch { /* ignore */ }
+      return next;
+    });
+  }, [key]);
+  return [done, toggle];
+}
+
+function ActionRow({ action, isDone, onToggle }) {
+  return (
+    <button type="button" onClick={() => onToggle(action.id)}
+            className={cn("w-full text-left flex gap-3 rounded-lg border p-3 transition hover:bg-muted/50",
+                          isDone && "opacity-60")}>
+      {isDone
+        ? <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600 mt-0.5" />
+        : <Circle className="h-5 w-5 shrink-0 text-muted-foreground mt-0.5" />}
+      <div className="space-y-1 min-w-0">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Badge variant="outline" className={cn("border-transparent", SEVERITY_CLASS[action.severity])}>
+            {SEVERITY_LABEL[action.severity] ?? action.severity}
+          </Badge>
+          <span className="text-xs text-muted-foreground">{action.category}</span>
+          <span className="text-xs text-muted-foreground break-all">· {action.host}</span>
+        </div>
+        <div className={cn("text-sm font-medium", isDone && "line-through")}>{action.advice}</div>
+        {action.description && <div className="text-xs text-muted-foreground">{action.description}</div>}
+      </div>
+    </button>
+  );
+}
+
+function ActionsCard({ findings, scanId }) {
+  const actions = remediationActions(findings);
+  const [done, toggle] = useDoneSet(scanId);
+  if (actions.length === 0) return null;
+  const todo = actions.filter((a) => !done.has(a.id));
+  const handled = actions.filter((a) => done.has(a.id));
+  return (
+    <Card className="shadow-soft">
+      <CardHeader>
+        <CardTitle>Actions de remédiation</CardTitle>
+        <CardDescription>
+          {todo.length} à traiter · {handled.length} traité{handled.length > 1 ? "s" : ""}.
+          Cochez une action une fois corrigée (enregistré sur cet appareil).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="grid md:grid-cols-2 gap-6">
+        <div className="space-y-2">
+          <div className="text-sm font-semibold text-muted-foreground">À traiter ({todo.length})</div>
+          {todo.length === 0
+            ? <p className="text-sm text-muted-foreground">Tout est traité 🎉</p>
+            : todo.map((a) => <ActionRow key={a.id} action={a} isDone={false} onToggle={toggle} />)}
+        </div>
+        <div className="space-y-2">
+          <div className="text-sm font-semibold text-muted-foreground">Traité ({handled.length})</div>
+          {handled.length === 0
+            ? <p className="text-sm text-muted-foreground">Aucune action traitée pour l'instant.</p>
+            : handled.map((a) => <ActionRow key={a.id} action={a} isDone onToggle={toggle} />)}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 function Kpi({ label, value }) {
   return (
     <Card className="shadow-soft">
@@ -85,7 +217,7 @@ function Kpi({ label, value }) {
   );
 }
 
-function Report({ report }) {
+function Report({ report, scanId }) {
   const { summary } = report;
   return (
     <div className="space-y-6">
@@ -115,6 +247,10 @@ function Report({ report }) {
           </Card>
         </div>
       )}
+
+      {report.findings.length > 0 && <TopHostsCard findings={report.findings} />}
+
+      {report.findings.length > 0 && <ActionsCard findings={report.findings} scanId={scanId} />}
 
       <Card className="shadow-soft">
         <CardHeader><CardTitle>Findings</CardTitle></CardHeader>
@@ -380,7 +516,7 @@ export default function ScanDetail() {
         </Alert>
       )}
 
-      {report && <Report report={report} />}
+      {report && <Report report={report} scanId={scanId} />}
     </div>
   );
 }
