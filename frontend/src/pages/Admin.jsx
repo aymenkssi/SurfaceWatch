@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { CheckCircle2, Clock, Loader2, RefreshCw, Search, ShieldCheck, Undo2 } from "lucide-react";
+import { CheckCircle2, Clock, Loader2, Mail, RefreshCw, Search, ShieldCheck, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -206,7 +206,12 @@ export default function Admin() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Administration</h1>
-        <Button variant="outline" size="sm" onClick={load}><RefreshCw className="h-4 w-4" /> Actualiser</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" asChild>
+            <a href="#smtp"><Mail className="h-4 w-4" /> Configuration e-mail</a>
+          </Button>
+          <Button variant="outline" size="sm" onClick={load}><RefreshCw className="h-4 w-4" /> Actualiser</Button>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -217,6 +222,8 @@ export default function Admin() {
           hint={`${scans.requested_7d} sur 7 j · ${scans.requested_total} au total`} />
         <StatTile label="Scans en cours" value={scans.active} hint={`${users.with_verified_domain} utilisateur(s) avec domaine vérifié`} />
       </div>
+
+      <SmtpSettingsCard />
 
       <div className="grid lg:grid-cols-3 gap-4">
         <Card className="shadow-soft lg:col-span-2">
@@ -304,8 +311,6 @@ export default function Admin() {
           </Table>
         </CardContent>
       </Card>
-
-      <SmtpSettingsCard />
 
       <Card className="shadow-soft">
         <CardHeader><CardTitle className="text-base">Journal d'audit (50 derniers)</CardTitle></CardHeader>
