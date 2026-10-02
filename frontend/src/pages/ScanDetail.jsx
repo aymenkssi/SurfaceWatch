@@ -5,14 +5,66 @@ import { toast } from "sonner";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { isActive, ScanStatusBadge } from "@/components/ScanStatusBadge";
 import { api, downloadFile, errorMessage } from "@/lib/api";
 import { formatDate, LEVELS } from "@/lib/format";
+import { countByCategory, healthScores } from "@/lib/risk";
 import { cn } from "@/lib/utils";
 
 const POLL_MS = 5000;
+
+const SEVERITY_TILES = [
+  { key: "CRITICAL", label: "Critique", color: "#b91c1c" },
+  { key: "HIGH", label: "Élevé", color: "#ea580c" },
+  { key: "MEDIUM", label: "Moyen", color: "#ca8a04" },
+  { key: "LOW", label: "Faible", color: "#15803d" },
+];
+
+// Health score 1..5 -> colour (1 = needs work, 5 = healthy).
+const SCORE_COLOR = ["#b91c1c", "#b91c1c", "#ea580c", "#ca8a04", "#65a30d", "#15803d"];
+
+function SeverityCards({ counts }) {
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      {SEVERITY_TILES.map(({ key, label, color }) => (
+        <div key={key} className="rounded-xl p-4 text-white" style={{ backgroundColor: color }}>
+          <div className="text-3xl font-extrabold leading-none">{counts?.[key] ?? 0}</div>
+          <div className="text-xs uppercase tracking-wide opacity-95 mt-1">{label}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HealthPanel({ findings }) {
+  const { categories, overall } = healthScores(findings);
+  const perCat = countByCategory(findings);
+  return (
+    <div className="flex flex-col md:flex-row gap-6 items-center">
+      <div className="flex flex-col items-center justify-center shrink-0">
+        <div className="text-5xl font-extrabold" style={{ color: SCORE_COLOR[overall] }}>
+          {overall}<span className="text-2xl text-muted-foreground font-bold">/5</span>
+        </div>
+        <div className="text-xs text-muted-foreground mt-1">Score global</div>
+      </div>
+      <div className="flex-1 w-full space-y-3">
+        {categories.map(({ category, score }) => (
+          <div key={category}>
+            <div className="flex justify-between text-sm mb-1">
+              <span>{category} <span className="text-muted-foreground">({perCat[category]})</span></span>
+              <span className="tabular-nums font-medium" style={{ color: SCORE_COLOR[score] }}>{score}/5</span>
+            </div>
+            <div className="h-2 rounded bg-muted">
+              <div className="h-full rounded" style={{ width: `${(score / 5) * 100}%`, backgroundColor: SCORE_COLOR[score] }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 const SEVERITY_CLASS = {
   CRITICAL: "bg-destructive text-destructive-foreground",
@@ -48,8 +100,24 @@ function Report({ report }) {
         <Kpi label="Findings" value={summary.findings} />
       </div>
 
+      {report.findings.length > 0 && (
+        <div className="grid lg:grid-cols-2 gap-6">
+          <Card className="shadow-soft">
+            <CardHeader><CardTitle>Risques par sévérité</CardTitle></CardHeader>
+            <CardContent><SeverityCards counts={summary.severity_counts} /></CardContent>
+          </Card>
+          <Card className="shadow-soft">
+            <CardHeader>
+              <CardTitle>Score de santé</CardTitle>
+              <CardDescription>Par catégorie (1 = à corriger, 5 = sain).</CardDescription>
+            </CardHeader>
+            <CardContent><HealthPanel findings={report.findings} /></CardContent>
+          </Card>
+        </div>
+      )}
+
       <Card className="shadow-soft">
-        <CardHeader><CardTitle>Findings par sévérité</CardTitle></CardHeader>
+        <CardHeader><CardTitle>Findings</CardTitle></CardHeader>
         <CardContent>
           {report.findings.length === 0 ? (
             <p className="text-sm text-muted-foreground">Aucun finding sur ce scan.</p>
