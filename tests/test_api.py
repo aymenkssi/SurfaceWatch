@@ -126,11 +126,14 @@ def test_worker_stores_events_and_report_is_served(client, queued, monkeypatch):
         return scans.ScanResult("sw_x", domain, scans.ScanLevel(level), 0, SAMPLE_EVENTS)
 
     monkeypatch.setattr(scans, "run_scan", fake_run_scan)
+    # Keep the suite hermetic: no live DNS for the passive mail checks.
+    monkeypatch.setattr(worker.checks, "mail_config_findings", lambda domain: [])
     assert worker.execute_scan(scan_id) == "done"
     assert calls == [("example.fr", "passive", False)]
 
     report = client.get(f"/api/scans/{scan_id}/report", headers=h).json()
-    assert report["summary"] == {"subdomains": 1, "ips": 1, "urls": 0, "findings": 1}
+    assert report["summary"] == {"subdomains": 1, "ips": 1, "urls": 0, "findings": 1,
+                                 "technologies": 0}
     assert report["findings"][0]["severity"] == "HIGH"
     html = client.get(f"/api/scans/{scan_id}/report.html", headers=h)
     assert "Dangling CNAME" in html.text

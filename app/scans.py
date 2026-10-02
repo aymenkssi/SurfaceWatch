@@ -34,14 +34,21 @@ FORBIDDEN_FLAGS = ["loud", "invasive", "iis-shortnames", "web-heavy"]
 # modules flagged email-enum (sslcert, dnscaa, dnstlsrpt) are kept for their DNS results; the
 # e-mail addresses they emit are discarded in load_events().
 EXCLUDED_MODULES = ["hunterio"]
+# BBOT omits HTTP_RESPONSE from its output by default. We need it (headers only) to
+# derive security-header and advertised-version findings, so the active level overrides
+# omit_event_types to keep HTTP_RESPONSE while still dropping the other noisy types.
+_OMIT_EVENT_TYPES = "omit_event_types=[RAW_TEXT,URL_UNVERIFIED,DNS_NAME_UNRESOLVED,FILESYSTEM,WEB_PARAMETER]"
+
 LEVEL_ARGS: dict[ScanLevel, list[str]] = {
     ScanLevel.PASSIVE: ["-p", "subdomain-enum", "-rf", "passive", "-em", *EXCLUDED_MODULES],
     ScanLevel.STANDARD: ["-p", "subdomain-enum", "web", "-ef", *FORBIDDEN_FLAGS,
-                         "-em", *EXCLUDED_MODULES],
+                         "-em", *EXCLUDED_MODULES, "-c", _OMIT_EVENT_TYPES],
 }
 
 # Personal data BBOT may emit: never stored, never shown in reports.
 PERSONAL_DATA_EVENTS = {"EMAIL_ADDRESS", "USERNAME", "PASSWORD", "HASHED_PASSWORD"}
+# HTTP_RESPONSE carries the full page body; keep only the light metadata we analyse.
+_HTTP_RESPONSE_KEEP = {"url", "input", "host", "status_code", "title", "header"}
 
 
 class ScanNotAllowed(PermissionError):
@@ -120,6 +127,10 @@ def load_events(path: Path) -> list[dict]:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
-            if isinstance(event, dict) and event.get("type") not in PERSONAL_DATA_EVENTS:
-                events.append(event)
+            if not isinstance(event, dict) or event.get("type") in PERSONAL_DATA_EVENTS:
+                continue
+            # Drop the heavy body/raw_header from HTTP responses: we only analyse headers.
+            if event.get("type") == "HTTP_RESPONSE" and isinstance(event.get("data"), dict):
+                event["data"] = {k: v for k, v in event["data"].items() if k in _HTTP_RESPONSE_KEEP}
+            events.append(event)
     return events

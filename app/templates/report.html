@@ -24,6 +24,7 @@
     <div class="kpi"><b>{{ report.subdomains|length }}</b>sous-domaines</div>
     <div class="kpi"><b>{{ report.ip_count }}</b>adresses IP</div>
     <div class="kpi"><b>{{ report.urls|length }}</b>URL</div>
+    <div class="kpi"><b>{{ report.technologies|length }}</b>technologies</div>
     <div class="kpi"><b>{{ report.findings|length }}</b>findings</div>
   </div>
 
@@ -36,6 +37,16 @@
     {% endfor %}
   </table>
   {% else %}<p>Aucun finding sur ce scan.</p>{% endif %}
+
+  {% if report.technologies %}
+  <h2>Technologies détectées</h2>
+  <table>
+    <tr><th>Hôte</th><th>Technologie / version</th></tr>
+    {% for t in report.technologies %}
+    <tr><td>{{ t.host }}</td><td>{{ t.technology }}</td></tr>
+    {% endfor %}
+  </table>
+  {% endif %}
 
   <h2>Sous-domaines découverts</h2>
   <table>

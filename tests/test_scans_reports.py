@@ -80,6 +80,31 @@ def test_run_scan_reads_events_then_deletes_bbot_output(tmp_path, monkeypatch):
     assert list((tmp_path / "scans").iterdir()) == []
 
 
+def test_standard_level_keeps_http_response_in_output():
+    """HTTP_RESPONSE is omitted by BBOT by default; the active level must re-include it
+    (we need the headers) while still dropping the other noisy types."""
+    args = LEVEL_ARGS[ScanLevel.STANDARD]
+    cfg = args[args.index("-c") + 1]
+    assert cfg.startswith("omit_event_types=")
+    assert "HTTP_RESPONSE" not in cfg
+    assert "RAW_TEXT" in cfg
+
+
+def test_load_events_strips_http_response_body(tmp_path):
+    from app.scans import load_events
+    import json
+
+    path = tmp_path / "output.json"
+    path.write_text(json.dumps({
+        "type": "HTTP_RESPONSE",
+        "data": {"url": "https://x/", "host": "x", "header": {"server": "nginx"},
+                 "body": "secret page body", "raw_header": "HTTP/1.1 200"},
+    }) + "\n")
+    events = load_events(path)
+    assert events[0]["data"].get("body") is None
+    assert events[0]["data"]["header"] == {"server": "nginx"}
+
+
 def test_email_harvesting_module_is_excluded_at_every_level():
     for args in LEVEL_ARGS.values():
         assert "hunterio" in args[args.index("-em") + 1:]

@@ -37,10 +37,11 @@ function Report({ report }) {
   const { summary } = report;
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-5">
         <Kpi label="Sous-domaines" value={summary.subdomains} />
         <Kpi label="Adresses IP" value={summary.ips} />
         <Kpi label="URL" value={summary.urls} />
+        <Kpi label="Technologies" value={summary.technologies ?? 0} />
         <Kpi label="Findings" value={summary.findings} />
       </div>
 
@@ -75,6 +76,27 @@ function Report({ report }) {
           )}
         </CardContent>
       </Card>
+
+      {report.technologies?.length > 0 && (
+        <Card className="shadow-soft">
+          <CardHeader><CardTitle>Technologies détectées</CardTitle></CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow><TableHead>Hôte</TableHead><TableHead>Technologie / version</TableHead></TableRow>
+              </TableHeader>
+              <TableBody>
+                {report.technologies.map((t, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="font-medium break-all">{t.host}</TableCell>
+                    <TableCell className="text-muted-foreground break-all">{t.technology}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="shadow-soft">
         <CardHeader><CardTitle>Sous-domaines découverts</CardTitle></CardHeader>
