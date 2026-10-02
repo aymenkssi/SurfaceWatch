@@ -53,6 +53,8 @@ class DomainIn(BaseModel):
 class ScanIn(BaseModel):
     domain_id: str
     level: scans.ScanLevel = scans.ScanLevel.PASSIVE
+    # Explicit consent for levels that actively probe the target (rule 3). Logged below.
+    consent: bool = False
 
 
 def _user_out(user: User) -> dict:
@@ -216,8 +218,15 @@ def start_scan(body: ScanIn, request: Request, user: User = Depends(get_current_
     d = _get_domain(db, user, body.domain_id)
 
     # Rule 1: no active scan without proof of ownership.
-    if body.level is not scans.ScanLevel.PASSIVE and not d.verified:
+    if body.level in scans.ACTIVE_LEVELS and not d.verified:
         raise HTTPException(status_code=403, detail="active scans require a verified domain")
+
+    # Rule 3: levels that actively probe the target need explicit, logged consent.
+    if body.level in scans.CONSENT_LEVELS and not body.consent:
+        raise HTTPException(status_code=403,
+                            detail="this level requires your explicit consent to scan actively")
+
+    source_ip = request.client.host if request.client else None
 
     # Rule 2 + SPEC guardrails: concurrency and daily quota.
     if _count_scans(db, user, Scan.status.in_(ACTIVE_STATUSES)) >= settings.max_concurrent_scans_per_user:
@@ -225,14 +234,22 @@ def start_scan(body: ScanIn, request: Request, user: User = Depends(get_current_
     since: datetime = utcnow() - timedelta(days=1)
     if _count_scans(db, user, Scan.created_at >= since) >= settings.max_scans_per_day:
         raise HTTPException(status_code=429, detail="daily scan quota reached")
+    # The deep level has its own, stricter daily quota.
+    if body.level is scans.ScanLevel.DEEP and _count_scans(
+            db, user, Scan.level == scans.ScanLevel.DEEP.value, Scan.created_at >= since
+    ) >= settings.deep_max_scans_per_day:
+        raise HTTPException(status_code=429, detail="daily quota for deep scans reached")
 
     scan = Scan(user_id=user.id, domain=d.name, level=body.level.value)
     db.add(scan)
     db.flush()
     # Rule 4: audit every scan request.
     db.add(AuditLog(user_id=user.id, user_email=user.email, action="scan.requested",
-                    domain=d.name, level=scan.level, scan_id=scan.id,
-                    source_ip=request.client.host if request.client else None))
+                    domain=d.name, level=scan.level, scan_id=scan.id, source_ip=source_ip))
+    # Log the consent separately so the trail shows the user agreed to active probing.
+    if body.level in scans.CONSENT_LEVELS:
+        db.add(AuditLog(user_id=user.id, user_email=user.email, action="scan.active_consent",
+                        domain=d.name, level=scan.level, scan_id=scan.id, source_ip=source_ip))
     db.commit()
 
     try:

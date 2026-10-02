@@ -24,6 +24,13 @@ from app.domains import normalize_domain
 class ScanLevel(str, Enum):
     PASSIVE = "passive"
     STANDARD = "standard"  # active — requires a verified domain (v0.3)
+    DEEP = "deep"          # active port scan + service fingerprinting — verified + consent
+
+
+# Levels that scan the target itself: a verified domain is mandatory (rule 1).
+ACTIVE_LEVELS = frozenset({ScanLevel.STANDARD, ScanLevel.DEEP})
+# Levels that require explicit, logged user consent on top of verification (rule 3).
+CONSENT_LEVELS = frozenset({ScanLevel.DEEP})
 
 
 # Server-side presets. NEVER build these from user input.
@@ -39,10 +46,23 @@ EXCLUDED_MODULES = ["hunterio"]
 # omit_event_types to keep HTTP_RESPONSE while still dropping the other noisy types.
 _OMIT_EVENT_TYPES = "omit_event_types=[RAW_TEXT,URL_UNVERIFIED,DNS_NAME_UNRESOLVED,FILESYSTEM,WEB_PARAMETER]"
 
+# The "deep" level adds a real port scan (masscan, via the portscan module) and service
+# fingerprinting (fingerprintx). masscan is "loud", so we cannot exclude the loud flag here;
+# instead we exclude it everywhere it matters and forbid the same aggressive flags as the
+# other levels (invasive auth brute-force, iis-shortnames/web-heavy, paramminer). The preset
+# stays server-side: the user never gets to pick modules.
+DEEP_FORBIDDEN_FLAGS = ["invasive", "iis-shortnames", "web-heavy", "web-paramminer"]
+DEEP_MODULES = ["portscan", "fingerprintx"]
+
 LEVEL_ARGS: dict[ScanLevel, list[str]] = {
     ScanLevel.PASSIVE: ["-p", "subdomain-enum", "-rf", "passive", "-em", *EXCLUDED_MODULES],
     ScanLevel.STANDARD: ["-p", "subdomain-enum", "web", "-ef", *FORBIDDEN_FLAGS,
                          "-em", *EXCLUDED_MODULES, "-c", _OMIT_EVENT_TYPES],
+    ScanLevel.DEEP: ["-p", "subdomain-enum", "web", "-m", *DEEP_MODULES,
+                     "-ef", *DEEP_FORBIDDEN_FLAGS, "-em", *EXCLUDED_MODULES,
+                     "-c", _OMIT_EVENT_TYPES,
+                     "-c", "modules.portscan.top_ports=100",
+                     "-c", "modules.portscan.rate=300"],
 }
 
 # Personal data BBOT may emit: never stored, never shown in reports.
@@ -85,17 +105,20 @@ def run_scan(raw_domain: str, level: str, domain_verified: bool) -> ScanResult:
     domain = normalize_domain(raw_domain)
     level = ScanLevel(level)
 
-    if level is not ScanLevel.PASSIVE and not domain_verified:
+    if level in ACTIVE_LEVELS and not domain_verified:
         raise ScanNotAllowed("active scans require a verified domain")
 
     scan_id = f"sw_{uuid.uuid4().hex[:12]}"
     output_dir = settings.scans_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Deep scans run longer (port scan + fingerprinting) but get a stricter dedicated cap.
+    timeout = (settings.deep_scan_timeout_seconds if level is ScanLevel.DEEP
+               else settings.scan_timeout_seconds)
     cmd = build_command(domain, level, scan_id, output_dir)
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=settings.scan_timeout_seconds, check=False
+            cmd, capture_output=True, text=True, timeout=timeout, check=False
         )
     except subprocess.TimeoutExpired:
         shutil.rmtree(output_dir / scan_id, ignore_errors=True)

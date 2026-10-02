@@ -26,6 +26,7 @@ class Report:
     urls: set[str] = field(default_factory=set)
     findings: list[dict] = field(default_factory=list)
     technologies: list[dict] = field(default_factory=list)  # {host, technology}
+    services: list[dict] = field(default_factory=list)  # {host, port, protocol}
 
     @property
     def ip_count(self) -> int:
@@ -38,12 +39,21 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
     findings: list[dict] = []
     tech_seen: set[tuple[str, str]] = set()
     technologies: list[dict] = []
+    services: dict[tuple[str, str], str] = {}  # (host, port) -> protocol
 
     def add_tech(host: str, name: str) -> None:
         key = (host, name)
         if name and key not in tech_seen:
             tech_seen.add(key)
             technologies.append({"host": host, "technology": name})
+
+    def add_service(host: str, port: str, protocol: str = "") -> None:
+        if not host or not port:
+            return
+        key = (host, str(port))
+        # A PROTOCOL event names the service; keep it over a bare open port.
+        if key not in services or (protocol and not services[key]):
+            services[key] = protocol
 
     for ev in events:
         etype = ev.get("type")
@@ -54,6 +64,12 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
                 hosts[data].add(ip)
         elif etype == "URL" and isinstance(data, str):
             urls.add(data)
+        elif etype == "OPEN_TCP_PORT" and isinstance(data, str):
+            host, _, port = data.rpartition(":")
+            add_service(host.strip("[]"), port)
+        elif etype == "PROTOCOL" and isinstance(data, dict):
+            add_service(str(data.get("host", "")), str(data.get("port", "")),
+                        str(data.get("protocol", "")))
         elif etype == "TECHNOLOGY" and isinstance(data, dict):
             add_tech(str(data.get("host", "")), str(data.get("technology", "")))
         elif etype in {"FINDING", "VULNERABILITY"} and isinstance(data, dict):
@@ -78,6 +94,10 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
         urls=urls,
         findings=findings,
         technologies=sorted(technologies, key=lambda t: (t["host"], t["technology"])),
+        services=[{"host": h, "port": int(p) if p.isdigit() else p, "protocol": proto}
+                  for (h, p), proto in sorted(services.items(),
+                                              key=lambda kv: (kv[0][0], int(kv[0][1])
+                                                              if kv[0][1].isdigit() else 0))],
     )
 
 
@@ -93,11 +113,13 @@ def report_to_dict(report: Report) -> dict:
             "urls": len(report.urls),
             "findings": len(report.findings),
             "technologies": len(report.technologies),
+            "services": len(report.services),
         },
         "subdomains": [{"host": h, "ips": sorted(ips)} for h, ips in report.subdomains.items()],
         "urls": sorted(report.urls),
         "findings": report.findings,
         "technologies": report.technologies,
+        "services": report.services,
     }
 
 

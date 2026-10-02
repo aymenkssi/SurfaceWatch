@@ -91,6 +91,36 @@ def test_active_scan_requires_verified_domain(client, queued, monkeypatch):
     assert r.status_code == 202 and queued == [r.json()["id"]]
 
 
+def test_deep_scan_requires_consent(client, queued, monkeypatch):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: value == d["record_value"])
+    assert client.post(f"/api/domains/{d['id']}/verify", headers=h).json()["verified"] is True
+
+    # Verified but no consent -> refused.
+    r = client.post("/api/scans", json={"domain_id": d["id"], "level": "deep"}, headers=h)
+    assert r.status_code == 403 and not queued
+
+    # Verified + consent -> accepted, and the consent is written to the audit trail.
+    r = client.post("/api/scans", json={"domain_id": d["id"], "level": "deep", "consent": True}, headers=h)
+    assert r.status_code == 202
+    with SessionLocal() as db:
+        actions = {a.action for a in db.query(AuditLog).filter_by(scan_id=r.json()["id"])}
+    assert "scan.active_consent" in actions
+
+
+def test_deep_scan_has_its_own_daily_quota(client, queued, monkeypatch):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: value == d["record_value"])
+    client.post(f"/api/domains/{d['id']}/verify", headers=h)
+    # Isolate the dedicated deep quota from the general concurrency/daily guards.
+    monkeypatch.setattr(api.get_settings(), "deep_max_scans_per_day", 0)
+
+    r = client.post("/api/scans", json={"domain_id": d["id"], "level": "deep", "consent": True}, headers=h)
+    assert r.status_code == 429 and "deep" in r.json()["detail"] and not queued
+
+
 def test_raw_bbot_options_are_rejected(client):
     h = _auth(client)
     d = _add_domain(client, h)
@@ -133,7 +163,7 @@ def test_worker_stores_events_and_report_is_served(client, queued, monkeypatch):
 
     report = client.get(f"/api/scans/{scan_id}/report", headers=h).json()
     assert report["summary"] == {"subdomains": 1, "ips": 1, "urls": 0, "findings": 1,
-                                 "technologies": 0}
+                                 "technologies": 0, "services": 0}
     assert report["findings"][0]["severity"] == "HIGH"
     html = client.get(f"/api/scans/{scan_id}/report.html", headers=h)
     assert "Dangling CNAME" in html.text

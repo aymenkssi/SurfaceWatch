@@ -87,12 +87,17 @@ export function DomainCard({ domain, onChange, onScan, scanBusy }) {
         )}
 
         <div className="flex flex-wrap items-center gap-2">
-          {Object.entries(LEVELS).map(([level, { label, description }]) => {
+          {Object.entries(LEVELS).map(([level, { label, description, requiresConsent }]) => {
             const locked = level !== "passive" && !domain.verified;
+            const run = () => {
+              if (requiresConsent && !window.confirm(
+                `Le niveau « ${label} » lance un scan de ports actif vers ${domain.name}. ` +
+                "Vous confirmez être autorisé à scanner ce domaine ?")) return;
+              onScan(domain, level, !!requiresConsent);
+            };
             return (
               <Button key={level} size="sm" variant={level === "passive" ? "secondary" : "default"}
-                      disabled={locked || scanBusy} title={description}
-                      onClick={() => onScan(domain, level)}>
+                      disabled={locked || scanBusy} title={description} onClick={run}>
                 Scan {label.toLowerCase()}
               </Button>
             );

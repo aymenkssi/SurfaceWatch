@@ -1,3 +1,4 @@
+from app import scans
 from app.reports import build_report, render_html
 from app.scans import LEVEL_ARGS, ScanLevel, ScanNotAllowed, build_command, run_scan
 
@@ -108,3 +109,35 @@ def test_load_events_strips_http_response_body(tmp_path):
 def test_email_harvesting_module_is_excluded_at_every_level():
     for args in LEVEL_ARGS.values():
         assert "hunterio" in args[args.index("-em") + 1:]
+
+
+def test_deep_level_enables_portscan_and_fingerprintx():
+    args = LEVEL_ARGS[ScanLevel.DEEP]
+    modules = set(args[args.index("-m") + 1:args.index("-ef")])
+    assert {"portscan", "fingerprintx"} <= modules
+    # Deep allows the loud flag (portscan is loud) but still forbids the aggressive ones.
+    excluded = set(args[args.index("-ef") + 1:args.index("-em")])
+    assert {"invasive", "iis-shortnames", "web-heavy", "web-paramminer"} <= excluded
+    assert "loud" not in excluded
+
+
+def test_deep_level_is_active_and_consent_gated():
+    assert ScanLevel.DEEP in scans.ACTIVE_LEVELS
+    assert ScanLevel.DEEP in scans.CONSENT_LEVELS
+
+
+def test_deep_scan_requires_verification():
+    with pytest.raises(ScanNotAllowed):
+        run_scan("example.fr", "deep", domain_verified=False)
+
+
+def test_build_report_surfaces_services():
+    events = [
+        {"type": "OPEN_TCP_PORT", "data": "mail.example.fr:25"},
+        {"type": "PROTOCOL", "data": {"host": "mail.example.fr", "port": 25, "protocol": "SMTP"}},
+        {"type": "OPEN_TCP_PORT", "data": "www.example.fr:443"},
+    ]
+    report = build_report("example.fr", "deep", events)
+    by_host = {(s["host"], s["port"]): s["protocol"] for s in report.services}
+    assert by_host[("mail.example.fr", 25)] == "SMTP"
+    assert ("www.example.fr", 443) in by_host
