@@ -43,20 +43,43 @@ export function SmtpSettingsCard() {
   const [form, setForm] = useState(null);
   const [testTo, setTestTo] = useState("");
   const [busy, setBusy] = useState(null); // "save" | "test" | "reset"
+  const [loadError, setLoadError] = useState(null);
 
   const apply = (d) => { setData(d); setForm(toForm(d)); };
 
   const load = useCallback(async () => {
+    setLoadError(null);
     try {
       apply((await api.get("/admin/smtp")).data);
     } catch (err) {
-      toast.error(errorMessage(err, "Impossible de charger la configuration e-mail."));
+      setLoadError(errorMessage(err, "Impossible de charger la configuration e-mail."));
     }
   }, []);
 
   useEffect(() => { load(); }, [load]);
 
-  if (!form) return null;
+  // Always show the card, even while loading or when the API call fails, so it can be found.
+  if (!form) {
+    return (
+      <Card id="smtp" className="shadow-soft scroll-mt-20">
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Mail className="h-4 w-4" /> Configuration e-mail (SMTP)
+          </CardTitle>
+          {loadError && <CardDescription className="text-destructive">{loadError}</CardDescription>}
+        </CardHeader>
+        <CardContent>
+          {loadError ? (
+            <Button variant="outline" size="sm" onClick={load}>
+              <RotateCcw className="h-4 w-4" /> Réessayer
+            </Button>
+          ) : (
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
   const set = (key) => (e) => setForm({ ...form, [key]: e.target.value });
 
   const run = async (kind, fn) => {
@@ -100,7 +123,7 @@ export function SmtpSettingsCard() {
       : "Pour Brevo : la clé SMTP (onglet « SMTP & API » › SMTP), pas la clé API.";
 
   return (
-    <Card className="shadow-soft">
+    <Card id="smtp" className="shadow-soft scroll-mt-20">
       <CardHeader>
         <div className="flex flex-wrap items-center justify-between gap-2">
           <CardTitle className="text-base flex items-center gap-2"><Mail className="h-4 w-4" /> E-mails (SMTP)</CardTitle>
