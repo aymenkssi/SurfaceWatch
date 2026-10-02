@@ -10,12 +10,14 @@ and `send()` is a no-op. `send()` never raises, so a mail outage cannot break a 
 
 from __future__ import annotations
 
+import html
 import logging
+import re
 import smtplib
 import ssl
 from dataclasses import dataclass
 from email.message import EmailMessage
-from email.utils import formataddr, make_msgid
+from email.utils import formataddr, formatdate, make_msgid
 
 from app import crypto
 from app.config import get_settings
@@ -99,8 +101,39 @@ def _build(cfg: SmtpConfig, to: str, subject: str, body: str) -> EmailMessage:
     msg["To"] = to
     msg["Subject"] = f"[{app_name}] {subject}"
     msg["Message-ID"] = make_msgid(domain=cfg.from_address.rpartition("@")[2] or None)
-    msg.set_content(f"{body}\n\n--\n{app_name} · {cfg.public_url}\n")
+    # A missing Date header and text-only bodies are both common spam-filter signals.
+    msg["Date"] = formatdate(usegmt=True)
+    text = f"{body}\n\n--\n{app_name} · {cfg.public_url}\n"
+    msg.set_content(text)
+    msg.add_alternative(_to_html(subject, body, app_name, cfg.public_url), subtype="html")
     return msg
+
+
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def _to_html(subject: str, body: str, app_name: str, public_url: str) -> str:
+    """Minimal HTML twin of the plain-text body: escaped paragraphs, links made clickable."""
+    def para(chunk: str) -> str:
+        out, last = [], 0
+        for m in _URL_RE.finditer(chunk):
+            out.append(html.escape(chunk[last:m.start()]))
+            url = html.escape(m.group(0), quote=True)
+            out.append(f'<a href="{url}">{url}</a>')
+            last = m.end()
+        out.append(html.escape(chunk[last:]))
+        return "<p>" + "".join(out).replace("\n", "<br>") + "</p>"
+
+    paragraphs = "\n".join(para(c) for c in body.split("\n\n") if c.strip())
+    site = html.escape(public_url, quote=True)
+    return (
+        '<!doctype html><html lang="fr"><head><meta charset="utf-8">'
+        f"<title>{html.escape(subject)}</title></head>"
+        '<body style="font-family:Arial,sans-serif;font-size:15px;line-height:1.5;color:#1f2328">'
+        f"{paragraphs}"
+        f'<p style="color:#57606a;font-size:13px">-- <br>{html.escape(app_name)} · '
+        f'<a href="{site}">{site}</a></p></body></html>'
+    )
 
 
 def deliver(cfg: SmtpConfig, to: str, subject: str, body: str) -> None:
