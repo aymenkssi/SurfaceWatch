@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { KeyRound, Loader2, Trash2 } from "lucide-react";
+import { ImageUp, KeyRound, Loader2, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -9,6 +9,74 @@ import { Label } from "@/components/ui/label";
 import { useAuth } from "@/context/AuthContext";
 import { api, errorMessage } from "@/lib/api";
 import { formatDate } from "@/lib/format";
+import { fileToDataUri } from "@/lib/logo";
+
+function LogoCard() {
+  const { user, setUser } = useAuth();
+  const [busy, setBusy] = useState(false);
+  const inputRef = useRef(null);
+
+  const upload = async (file) => {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const logo = await fileToDataUri(file);
+      const res = await api.put("/users/me/logo", { logo });
+      setUser(res.data);
+      toast.success("Logo enregistré. Il apparaîtra sur vos rapports.");
+    } catch (err) {
+      toast.error(err.message || errorMessage(err));
+    } finally {
+      setBusy(false);
+      if (inputRef.current) inputRef.current.value = "";
+    }
+  };
+
+  const remove = async () => {
+    setBusy(true);
+    try {
+      const res = await api.delete("/users/me/logo");
+      setUser(res.data);
+      toast.success("Logo supprimé.");
+    } catch (err) {
+      toast.error(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card className="shadow-soft">
+      <CardHeader>
+        <CardTitle>Mon logo</CardTitle>
+        <CardDescription>
+          Affiché en haut à gauche de vos rapports de scan (PDF et HTML). PNG, JPEG, WebP, SVG ou
+          GIF, 256 Ko maximum.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {user.logo_data_uri && (
+          <img src={user.logo_data_uri} alt="Votre logo"
+               className="max-h-16 max-w-[220px] object-contain rounded border bg-white p-2" />
+        )}
+        <div className="flex flex-wrap gap-2">
+          <input ref={inputRef} type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
+                 className="hidden" onChange={(e) => upload(e.target.files?.[0])} />
+          <Button variant="outline" disabled={busy} onClick={() => inputRef.current?.click()}>
+            {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageUp className="h-4 w-4" />}
+            {user.logo_data_uri ? "Remplacer le logo" : "Téléverser un logo"}
+          </Button>
+          {user.logo_data_uri && (
+            <Button variant="ghost" className="text-destructive hover:text-destructive"
+                    disabled={busy} onClick={remove}>
+              <Trash2 className="h-4 w-4" /> Retirer
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
 function NotificationsCard() {
   const { user, setUser } = useAuth();
@@ -173,6 +241,7 @@ export default function Account() {
           <p><span className="text-muted-foreground">Inscrit le :</span> {formatDate(user.created_at)}</p>
         </CardContent>
       </Card>
+      <LogoCard />
       <PasswordCard />
       <NotificationsCard />
       <DeleteAccountCard />

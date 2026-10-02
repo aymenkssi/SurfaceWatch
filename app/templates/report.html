@@ -2,73 +2,171 @@
 <html lang="fr">
 <head>
   <meta charset="utf-8">
-  <title>Rapport EASM — {{ report.domain }} · SurfaceAttackWatch</title>
+  <title>Rapport EASM — {{ report.domain }} · {{ branding.site_name }}</title>
   <style>
-    body { font-family: system-ui, sans-serif; margin: 2rem; color: #1f2328; }
-    h1 { margin-bottom: 0; } .meta { color: #57606a; margin-top: .25rem; }
-    .kpis { display: flex; gap: 1rem; margin: 1.5rem 0; }
-    .kpi { border: 1px solid #d0d7de; border-radius: 8px; padding: .75rem 1rem; min-width: 120px; }
-    .kpi b { display: block; font-size: 1.6rem; }
-    table { border-collapse: collapse; width: 100%; margin-bottom: 1.5rem; }
-    th, td { border-bottom: 1px solid #d0d7de; padding: .4rem; text-align: left; font-size: .9rem; }
-    .sev-CRITICAL, .sev-HIGH { color: #cf222e; font-weight: 600; }
-    .sev-MEDIUM { color: #9a6700; font-weight: 600; }
-    .note { font-size: .85rem; color: #57606a; border-top: 1px solid #d0d7de; padding-top: 1rem; }
+    :root { --accent: {{ branding.accent }}; }
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; margin: 0;
+           color: #1f2328; font-size: 13px; line-height: 1.45; }
+    @page { size: A4; margin: 18mm 16mm; }
+    .page { padding: 0 4mm; }
+    .page-break { page-break-after: always; }
+
+    /* Header with the two logos: client left, site right. */
+    .brandbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+                padding-bottom: 12px; border-bottom: 2px solid var(--accent); }
+    .brandbar img { max-height: 46px; max-width: 220px; object-fit: contain; }
+    .brandbar .site { text-align: right; }
+    .brandbar .site .name { font-weight: 700; color: var(--accent); font-size: 15px; }
+    .logo-fallback { font-weight: 700; font-size: 18px; color: #6b7280; }
+
+    /* Cover */
+    .cover { min-height: 70vh; display: flex; flex-direction: column;
+             align-items: center; justify-content: center; text-align: center; }
+    .cover h1 { font-size: 40px; margin: 0 0 .25rem; color: #111827; }
+    .cover .subtitle { font-size: 20px; color: var(--accent); margin: 0 0 1.5rem; font-weight: 600; }
+    .cover .dates { color: #57606a; font-size: 13px; }
+    .cover .dates b { color: #1f2328; font-weight: 600; }
+    .coverband { height: 10px; background: var(--accent); border-radius: 4px; margin-top: 2rem; width: 60%; }
+
+    h2 { font-size: 18px; color: var(--accent); margin: 1.6rem 0 .6rem; }
+    h2:first-of-type { margin-top: .8rem; }
+
+    /* Flexbox (not grid) for broad WeasyPrint-version compatibility in the PDF. */
+    .kpis { display: flex; flex-wrap: wrap; gap: 10px; }
+    .kpi { flex: 1 1 28%; min-width: 150px; border: 1px solid #e2e5e9; border-radius: 10px;
+           padding: 12px 14px; background: #fafbfc; }
+    .kpi b { display: block; font-size: 1.9rem; line-height: 1.1; color: #111827; }
+    .kpi span { color: #57606a; font-size: 12px; }
+
+    .sevcards { display: flex; flex-wrap: wrap; gap: 10px; }
+    .sevcard { flex: 1 1 20%; min-width: 120px; border-radius: 10px; padding: 12px 14px; color: #fff; }
+    .sevcard .n { font-size: 2rem; font-weight: 800; line-height: 1; }
+    .sevcard .lbl { font-size: 12px; opacity: .95; text-transform: uppercase; letter-spacing: .03em; }
+    .sev-CRITICAL { background: #b91c1c; } .sev-HIGH { background: #ea580c; }
+    .sev-MEDIUM { background: #ca8a04; } .sev-LOW { background: #15803d; } .sev-INFO { background: #6b7280; }
+
+    table { border-collapse: collapse; width: 100%; margin-bottom: .5rem; }
+    th, td { border-bottom: 1px solid #e2e5e9; padding: 6px 8px; text-align: left;
+             font-size: 12px; vertical-align: top; }
+    th { color: #57606a; font-weight: 600; background: #f6f8fa; }
+    td.mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; font-size: 11.5px; }
+
+    .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px;
+            font-weight: 700; color: #fff; }
+    .txt-CRITICAL { color: #b91c1c; font-weight: 700; } .txt-HIGH { color: #ea580c; font-weight: 700; }
+    .txt-MEDIUM { color: #a16207; font-weight: 700; } .txt-LOW { color: #15803d; font-weight: 600; }
+    .kev { display: inline-block; margin-left: 6px; padding: 1px 6px; border-radius: 4px;
+           background: #7f1d1d; color: #fff; font-size: 10px; font-weight: 700; }
+    .muted { color: #57606a; }
+    .note { font-size: 11px; color: #57606a; border-top: 1px solid #e2e5e9;
+            padding-top: 10px; margin-top: 1.5rem; }
   </style>
 </head>
 <body>
-  <h1>Rapport de surface d'attaque externe</h1>
-  <p class="meta">{{ report.domain }} · niveau {{ report.level }} · {{ report.generated_at.strftime('%d/%m/%Y %H:%M') }} UTC</p>
 
+{% macro brandbar() %}
+  <div class="brandbar">
+    <div class="client">
+      {% if branding.client_logo %}<img src="{{ branding.client_logo }}" alt="Logo client">
+      {% else %}<span class="logo-fallback">{{ report.domain }}</span>{% endif %}
+    </div>
+    <div class="site">
+      {% if branding.site_logo %}<img src="{{ branding.site_logo }}" alt="{{ branding.site_name }}">
+      {% else %}<span class="name">{{ branding.site_name }}</span>{% endif %}
+    </div>
+  </div>
+{% endmacro %}
+
+{% set sev = report.severity_counts %}
+
+<!-- Cover -->
+<div class="page page-break">
+  {{ brandbar() }}
+  <div class="cover">
+    <h1>{{ report.domain }}</h1>
+    <p class="subtitle">Rapport de surface d'attaque externe</p>
+    <div class="dates">
+      <div>Niveau de scan : <b>{{ report.level }}</b></div>
+      <div>Rapport généré le <b>{{ report.generated_at.strftime('%d/%m/%Y à %H:%M') }} UTC</b></div>
+    </div>
+    <div class="coverband"></div>
+  </div>
+</div>
+
+<!-- Summary -->
+<div class="page">
+  {{ brandbar() }}
+
+  <h2>Découverte</h2>
   <div class="kpis">
-    <div class="kpi"><b>{{ report.subdomains|length }}</b>sous-domaines</div>
-    <div class="kpi"><b>{{ report.ip_count }}</b>adresses IP</div>
-    <div class="kpi"><b>{{ report.urls|length }}</b>URL</div>
-    <div class="kpi"><b>{{ report.services|length }}</b>services</div>
-    <div class="kpi"><b>{{ report.components|length }}</b>composants</div>
-    <div class="kpi"><b>{{ report.findings|length }}</b>findings</div>
+    <div class="kpi"><b>{{ report.subdomains|length }}</b><span>Sous-domaines</span></div>
+    <div class="kpi"><b>{{ report.ip_count }}</b><span>Adresses IP</span></div>
+    <div class="kpi"><b>{{ report.services|length }}</b><span>Services exposés</span></div>
+    <div class="kpi"><b>{{ report.components|length }}</b><span>Composants</span></div>
+    <div class="kpi"><b>{{ report.urls|length }}</b><span>URL</span></div>
+    <div class="kpi"><b>{{ report.findings|length }}</b><span>Risques / findings</span></div>
   </div>
 
+  <h2>Risques par sévérité</h2>
+  <div class="sevcards">
+    <div class="sevcard sev-CRITICAL"><div class="n">{{ sev.CRITICAL }}</div><div class="lbl">Critique</div></div>
+    <div class="sevcard sev-HIGH"><div class="n">{{ sev.HIGH }}</div><div class="lbl">Élevé</div></div>
+    <div class="sevcard sev-MEDIUM"><div class="n">{{ sev.MEDIUM }}</div><div class="lbl">Moyen</div></div>
+    <div class="sevcard sev-LOW"><div class="n">{{ sev.LOW }}</div><div class="lbl">Faible</div></div>
+  </div>
+
+  {% if report.vulnerable_components %}
+  <h2>Composants vulnérables</h2>
+  <table>
+    <tr><th>Composant</th><th>Version</th><th>Hôte</th><th>CVE</th><th>Sévérité</th></tr>
+    {% for c in report.vulnerable_components %}
+    <tr>
+      <td>{{ c.product }}</td>
+      <td class="mono">{{ c.version }}</td>
+      <td class="mono">{{ c.host }}</td>
+      <td>{{ c.vuln.cves|join(', ') }}{% if c.vuln.kev %}<span class="kev">KEV</span>{% endif %}</td>
+      <td class="txt-{{ c.vuln.severity }}">{{ c.vuln.severity }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  <p class="muted" style="font-size:11px">Vulnérabilités déduites des versions annoncées (CVE / CISA KEV) ;
+    un correctif rétroporté peut rendre un verdict inexact.</p>
+  {% endif %}
+</div>
+
+<!-- Details -->
+<div class="page">
   <h2>Findings</h2>
   {% if report.findings %}
   <table>
     <tr><th>Sévérité</th><th>Hôte</th><th>Description</th></tr>
     {% for f in report.findings %}
-    <tr><td class="sev-{{ f.severity }}">{{ f.severity }}</td><td>{{ f.host }}</td><td>{{ f.description }}</td></tr>
+    <tr><td class="txt-{{ f.severity }}">{{ f.severity }}</td><td class="mono">{{ f.host }}</td><td>{{ f.description }}</td></tr>
     {% endfor %}
   </table>
-  {% else %}<p>Aucun finding sur ce scan.</p>{% endif %}
+  {% else %}<p class="muted">Aucun finding sur ce scan.</p>{% endif %}
+
+  {% if report.components %}
+  <h2>Composants &amp; versions</h2>
+  <table>
+    <tr><th>Hôte</th><th>Composant</th><th>Version</th><th>Source</th><th>Vulnérable</th></tr>
+    {% for c in report.components %}
+    <tr>
+      <td class="mono">{{ c.host }}</td><td>{{ c.product }}</td><td class="mono">{{ c.version }}</td>
+      <td class="muted">{{ c.source }}</td>
+      <td>{% if c.vuln %}<span class="txt-{{ c.vuln.severity }}">{{ c.vuln.severity }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% endif %}
 
   {% if report.services %}
   <h2>Services exposés</h2>
   <table>
     <tr><th>Hôte</th><th>Port</th><th>Service</th></tr>
     {% for s in report.services %}
-    <tr><td>{{ s.host }}</td><td>{{ s.port }}</td><td>{{ s.protocol or '—' }}</td></tr>
-    {% endfor %}
-  </table>
-  {% endif %}
-
-  {% if report.components %}
-  <h2>Composants &amp; versions</h2>
-  <table>
-    <tr><th>Hôte</th><th>Composant</th><th>Version</th><th>Source</th></tr>
-    {% for c in report.components %}
-    <tr><td>{{ c.host }}</td><td>{{ c.product }}</td><td>{{ c.version }}</td><td>{{ c.source }}</td></tr>
-    {% endfor %}
-  </table>
-  <p class="note" style="border:0;padding:0;margin-top:-.75rem">
-    Versions déduites de ce que les hôtes annoncent (en-têtes HTTP, bannières de service).
-    Les vulnérabilités correspondantes apparaissent dans les findings (CVE / CISA KEV).
-  </p>
-  {% endif %}
-
-  {% if report.technologies %}
-  <h2>Technologies détectées</h2>
-  <table>
-    <tr><th>Hôte</th><th>Technologie / version</th></tr>
-    {% for t in report.technologies %}
-    <tr><td>{{ t.host }}</td><td>{{ t.technology }}</td></tr>
+    <tr><td class="mono">{{ s.host }}</td><td>{{ s.port }}</td><td>{{ s.protocol or '—' }}</td></tr>
     {% endfor %}
   </table>
   {% endif %}
@@ -77,13 +175,15 @@
   <table>
     <tr><th>Hôte</th><th>IP</th></tr>
     {% for host, ips in report.subdomains.items() %}
-    <tr><td>{{ host }}</td><td>{{ ips|sort|join(', ') }}</td></tr>
+    <tr><td class="mono">{{ host }}</td><td class="mono muted">{{ ips|sort|join(', ') or '—' }}</td></tr>
     {% endfor %}
   </table>
 
   <p class="note">
     {% if report.level == 'passive' %}Scan passif : données issues de sources publiques uniquement, aucune requête n'a été envoyée vers vos systèmes.{% endif %}
-    Ce rapport est un instantané et peut être incomplet. Généré par SurfaceAttackWatch (surfaceattackwatch.com, open source, AGPL-3.0), basé sur BBOT.
+    Ce rapport est un instantané et peut être incomplet. Généré par {{ branding.site_name }}.
   </p>
+</div>
+
 </body>
 </html>

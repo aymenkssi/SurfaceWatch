@@ -175,6 +175,59 @@ def test_admin_reset_quota_unknown_user_is_404(client):
     assert r.status_code == 404
 
 
+PNG_DATA_URI = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC"
+                "AAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==")
+
+
+def test_user_logo_set_served_and_cleared(client):
+    h = _auth(client)
+    assert client.put("/api/users/me/logo", json={"logo": PNG_DATA_URI}, headers=h).status_code == 200
+    assert client.get("/api/users/me", headers=h).json()["logo_data_uri"] == PNG_DATA_URI
+    assert client.delete("/api/users/me/logo", headers=h).status_code == 200
+    assert client.get("/api/users/me", headers=h).json()["logo_data_uri"] is None
+
+
+def test_user_logo_rejects_non_image(client):
+    h = _auth(client)
+    bad = client.put("/api/users/me/logo", json={"logo": "data:text/html;base64,PHNjcmlwdD4="}, headers=h)
+    assert bad.status_code == 422
+
+
+def test_admin_branding_update_is_public_and_audited(client):
+    admin = _admin(client)
+    r = client.put("/api/admin/branding", headers=admin, json={
+        "site_name": "ACME Scan", "accent_color": "#ff0000", "logo": PNG_DATA_URI})
+    assert r.status_code == 200
+    pub = client.get("/api/branding").json()
+    assert pub["site_name"] == "ACME Scan" and pub["accent"] == "#ff0000"
+    assert pub["site_logo"] == PNG_DATA_URI
+    with SessionLocal() as db:
+        assert db.query(AuditLog).filter_by(action="branding.update").count() == 1
+    # Bad accent is rejected.
+    assert client.put("/api/admin/branding", headers=admin,
+                      json={"site_name": "x", "accent_color": "red"}).status_code == 422
+
+
+def test_report_html_embeds_client_and_site_logos(client, queued, monkeypatch):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    scan_id = client.post("/api/scans", json={"domain_id": d["id"]}, headers=h).json()["id"]
+    monkeypatch.setattr(scans, "run_scan", lambda domain, level, verified:
+                        scans.ScanResult("sw_x", domain, scans.ScanLevel(level), 0, SAMPLE_EVENTS))
+    monkeypatch.setattr(worker.checks, "mail_config_findings", lambda domain: [])
+    assert worker.execute_scan(scan_id) == "done"
+
+    client.put("/api/users/me/logo", json={"logo": PNG_DATA_URI}, headers=h)
+    admin = _admin(client)
+    other_png = PNG_DATA_URI.replace("iVBOR", "iVBOR")  # same bytes is fine; both embed
+    client.put("/api/admin/branding", headers=admin,
+               json={"site_name": "ACME Scan", "accent_color": "#123456", "logo": other_png})
+
+    html = client.get(f"/api/scans/{scan_id}/report.html", headers=h).text
+    assert PNG_DATA_URI in html        # client logo (top-left)
+    assert "#123456" in html           # site accent colour applied
+
+
 def test_raw_bbot_options_are_rejected(client):
     h = _auth(client)
     d = _add_domain(client, h)

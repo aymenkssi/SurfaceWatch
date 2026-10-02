@@ -44,6 +44,8 @@ class User(Base):
     # this instant no longer count toward the per-level daily limit.
     scan_quota_reset_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+    # The customer's own logo, shown top-left on their reports (a small data: URI).
+    logo_data_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     domains: Mapped[list[Domain]] = relationship(
@@ -147,5 +149,20 @@ class SmtpSettings(Base):
     password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
     from_address: Mapped[str] = mapped_column(String(254), default="")
     public_url: Mapped[str] = mapped_column(String(300), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_by: Mapped[str | None] = mapped_column(String(254), nullable=True)  # admin e-mail
+
+
+class Branding(Base):
+    """Site-level report branding edited from the admin page (single row, id=1):
+    the site name, the site logo (shown top-right on reports) and an accent colour.
+    """
+
+    __tablename__ = "branding"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    site_name: Mapped[str] = mapped_column(String(100), default="SurfaceAttackWatch")
+    logo_data_uri: Mapped[str | None] = mapped_column(Text, nullable=True)
+    accent_color: Mapped[str] = mapped_column(String(7), default="#2563eb")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_by: Mapped[str | None] = mapped_column(String(254), nullable=True)  # admin e-mail
