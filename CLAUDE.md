@@ -1,6 +1,8 @@
-# SurfaceWatch — contexte pour Claude Code
+# SurfaceAttackWatch — contexte pour Claude Code
 
-> Nom provisoire. Service web **gratuit** de scan EASM (External Attack Surface Management)
+> Nom du service : **SurfaceAttackWatch** (surfaceattackwatch.com), ex-« SurfaceWatch ». Les
+> identifiants techniques (`surfacewatch` : paquet, base, conteneurs, `_surfacewatch-verify`)
+> restent inchangés. Service web **gratuit** de scan EASM (External Attack Surface Management)
 > basé sur **BBOT** (Black Lantern Security), avec génération de rapports.
 
 ## Le projet en une phrase
@@ -14,12 +16,25 @@ Ces règles passent avant toute fonctionnalité. Ne jamais les contourner, même
 1. **Aucun scan actif sans preuve de propriété du domaine.**
    - Méthode principale : enregistrement DNS TXT `_surfacewatch-verify.<domaine>` contenant un jeton unique.
    - Le jeton est lié à un utilisateur ET à un domaine, et expire.
+   - Seule exception : validation manuelle par un **admin** (`/admin`), motif obligatoire,
+     journalisée (`domain.manual_verify`) et marquée `verification_method = manual`.
+     Le rôle admin ne s'attribue qu'en CLI serveur (`python -m app.cli make-admin`).
    - Contexte : art. 323-1 et 323-3-1 du Code pénal (accès frauduleux, mise à disposition d'outil).
 2. **Mode passif** (sources publiques uniquement, aucun paquet vers la cible) : autorisé sans
    vérification, mais avec rate limit strict.
 3. **Les presets BBOT sont imposés côté serveur.** L'utilisateur choisit un « niveau »
-   (`passive`, `standard`), jamais des modules ou des options BBOT bruts.
-   Jamais de `kitchen-sink`, `web-heavy`, `webbrute`, `paramminer` en production.
+   (`passive`, `standard`, `advanced`), jamais des modules ou des options BBOT bruts.
+   - Le niveau `advanced` **active de la force brute de surface** : `dnsbrute`
+     (sous-domaines) et `webbrute` (répertoires web, liste de 1000 mots). Il n'est
+     autorisé **que** pour un domaine avec preuve de propriété DNS TXT valide
+     (revérifiée au lancement du job) **et** avec un consentement explicite de
+     l'utilisateur, journalisé dans le trail d'audit. Il a son propre quota
+     journalier et son propre timeout, plus stricts.
+   - Même en `advanced`, restent **interdits** : la force brute d'authentification
+     (`legba`, `medusa` — flag `invasive`), `iis-shortnames` / `web-heavy`
+     (`webbrute_shortnames`), le `paramminer` (flag `web-paramminer`), et bien sûr
+     `kitchen-sink`. Le consentement ne débloque jamais de modules bruts choisis
+     par l'utilisateur : le preset reste imposé côté serveur.
 4. **Journalisation obligatoire** de chaque scan : utilisateur, domaine, niveau, IP source, horodatage.
 5. **RGPD** : hébergement UE, rétention courte des résultats (30 jours par défaut),
    suppression à la demande, pas de module `email-enum` dans le MVP.
@@ -52,7 +67,10 @@ app/
   api.py         # routes JSON : auth, domaines, scans, rapports
   auth.py        # bcrypt + JWT
   db.py / models.py  # SQLAlchemy : User, Domain, Scan, AuditLog
-  worker.py      # jobs RQ : execute_scan, purge_expired
+  worker.py      # jobs RQ : execute_scan (+ e-mail de fin de scan), purge_expired
+  mailer.py      # e-mails SMTP : config admin en base (clé chiffrée), repli sur l'env
+  crypto.py      # chiffrement des secrets stockés en base (clé dérivée de SECRET_KEY)
+  cli.py         # commandes serveur : make-admin / revoke-admin
   config.py      # settings (pydantic-settings, variables d'env)
   domains.py     # normalisation de domaine, jetons, vérification DNS TXT
   scans.py       # lancement BBOT en sous-processus + parsing JSON
@@ -77,7 +95,15 @@ docker compose up --build              # tout le stack
 - Options BBOT de `app/scans.py` vérifiées contre les sources de BBOT 3.0.2 (sept. 2026).
   Le niveau `standard` exclut les flags `loud`, `invasive`, `iis-shortnames` et `web-heavy`
   (sinon `-p web` active `iis_shortnames`, `webbrute_shortnames` et `dnsbrute`).
-  Revérifier à chaque montée de version de BBOT.
+  Le niveau `advanced` ajoute explicitement `-m dnsbrute webbrute` et exclut les flags
+  `invasive`, `iis-shortnames`, `web-heavy`, `web-paramminer` (résolu vérifié sur BBOT 3.0.2 :
+  modules chargés = `dnsbrute`, `webbrute` uniquement côté brute-force ; `legba`, `medusa`,
+  `webbrute_shortnames`, `paramminer_*` bien exclus). Revérifier à chaque montée de version de BBOT.
+- Dépendances BBOT : installées **au build de l'image** (`python -m app.scans install-deps`, en
+  root avec `HOME=/home/sw`, + paquets apt des « core deps » BBOT) ; les scans tournent avec
+  `--no-deps`. Le worker n'est pas root et n'a pas `sudo` : sans ça, BBOT plante dans
+  `ensure_root` (`FileNotFoundError: 'sudo'`). `--no-deps` seul ne suffit pas (les core deps
+  sont vérifiées quand même). Toute modif d'un niveau impose de reconstruire l'image.
 - Le dossier de sortie BBOT d'un scan est supprimé dès que ses événements sont en base
   (rétention gérée par l'app, pas par `keep_scans`, qui ne concerne que `~/.bbot/scans`).
 - Tester d'abord BBOT sur un domaine qu'on possède, jamais sur un domaine tiers.

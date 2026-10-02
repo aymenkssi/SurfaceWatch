@@ -1,7 +1,11 @@
-# SurfaceWatch
+# SurfaceAttackWatch
 
 Service web gratuit de scan EASM (surface d'attaque externe) avec génération de rapports,
-basé sur [BBOT](https://github.com/blacklanternsecurity/bbot). *Nom provisoire.*
+basé sur [BBOT](https://github.com/blacklanternsecurity/bbot). En ligne sur surfaceattackwatch.com.
+
+Les identifiants techniques gardent l'ancien nom `surfacewatch` (dépôt, paquet Python, base
+Postgres, conteneurs, enregistrement DNS `_surfacewatch-verify`) pour ne casser ni les
+vérifications déjà faites ni le déploiement.
 
 **Statut : v0.2 — application web (front React + API).** Voir [`docs/SPEC.md`](docs/SPEC.md) pour la spec et la roadmap,
 et [`CLAUDE.md`](CLAUDE.md) pour les règles du projet.
@@ -23,6 +27,9 @@ rq worker scans                         # worker (nécessite Redis)
 
 cd frontend && npm install && npm run dev   # front sur http://localhost:5173
 ```
+
+## Production
+Déploiement sur VPS derrière Traefik (surfaceattackwatch.com) : voir [`docs/DEPLOIEMENT.md`](docs/DEPLOIEMENT.md).
 
 ## Architecture
 - **Front** : React 19 + Tailwind + shadcn/ui (même stack que Waselni_V2.0), build Vite.

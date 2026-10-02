@@ -8,6 +8,18 @@ import { CopyField } from "@/components/CopyField";
 import { api, errorMessage } from "@/lib/api";
 import { formatDate, LEVELS } from "@/lib/format";
 
+function verifyErrorMessage({ verify_error, verify_found = [], record_name, name }) {
+  const prefix = record_name.slice(0, -(name.length + 1));
+  switch (verify_error) {
+    case "doubled_name":
+      return `L'enregistrement a été créé à ${record_name}.${name} : votre fournisseur DNS ajoute déjà le domaine. Saisissez seulement « ${prefix} » comme nom.`;
+    case "mismatch":
+      return `Un enregistrement TXT existe mais sa valeur ne correspond pas au jeton actuel (trouvé : ${verify_found.join(", ")}). Copiez la valeur affichée ci-dessous.`;
+    default:
+      return "Enregistrement TXT introuvable sur les serveurs DNS du domaine. Vérifiez le nom et le type (TXT) de l'enregistrement, puis réessayez dans quelques minutes.";
+  }
+}
+
 export function DomainCard({ domain, onChange, onScan, scanBusy }) {
   const [busy, setBusy] = useState(null);
 
@@ -25,12 +37,12 @@ export function DomainCard({ domain, onChange, onScan, scanBusy }) {
   const verify = () => run("verify", async () => {
     const res = await api.post(`/domains/${domain.id}/verify`);
     if (res.data.verified) toast.success(`${domain.name} est vérifié.`);
-    else toast.warning("Enregistrement TXT introuvable. La propagation DNS peut prendre quelques minutes.");
+    else toast.warning(verifyErrorMessage(res.data), { duration: 10000 });
     onChange();
   });
 
   const regenerate = () => run("regenerate", async () => {
-    await api.post("/domains", { domain: domain.name });
+    await api.post("/domains", { domain: domain.name, renew: true });
     toast.success("Nouveau jeton généré. Mettez à jour votre enregistrement TXT.");
     onChange();
   });
@@ -49,7 +61,8 @@ export function DomainCard({ domain, onChange, onScan, scanBusy }) {
         <CardTitle className="text-lg break-all">{domain.name}</CardTitle>
         {domain.verified ? (
           <Badge variant="outline" className="border-transparent bg-success/15 text-success gap-1">
-            <CheckCircle2 className="h-3 w-3" /> Vérifié
+            <CheckCircle2 className="h-3 w-3" />
+            {domain.verification_method === "manual" ? "Vérifié (manuel)" : "Vérifié"}
           </Badge>
         ) : (
           <Badge variant="outline" className="border-transparent bg-warning/15 text-warning gap-1">

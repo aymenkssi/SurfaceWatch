@@ -8,7 +8,9 @@ from fastapi.testclient import TestClient
 from app import api, domains, scans, worker
 from app.db import SessionLocal
 from app.main import app
-from app.models import AuditLog
+from app.models import AuditLog, Domain, Scan
+
+PASSWORD = "correct horse battery"
 
 SAMPLE_EVENTS = [
     {"type": "DNS_NAME", "data": "www.example.fr", "resolved_hosts": ["203.0.113.10"]},
@@ -69,6 +71,29 @@ def test_domain_is_normalized_and_rejects_garbage(client):
     assert client.post("/api/domains", json={"domain": "example.fr; rm -rf /"}, headers=h).status_code == 400
 
 
+def _txt_ok_if(expected):
+    return lambda name, value: domains.TxtCheck(domains.TXT_OK if value == expected else domains.TXT_MISMATCH)
+
+
+def test_re_adding_domain_keeps_valid_token(client):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    again = client.post("/api/domains", json={"domain": "example.fr"}, headers=h).json()
+    assert again["record_value"] == d["record_value"]
+    renewed = client.post("/api/domains", json={"domain": "example.fr", "renew": True}, headers=h).json()
+    assert renewed["record_value"] != d["record_value"]
+
+
+def test_verify_reports_failure_reason(client, monkeypatch):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    monkeypatch.setattr(domains, "lookup_txt_record",
+                        lambda name, value: domains.TxtCheck(domains.TXT_MISMATCH, ("sw-verify=old",)))
+    r = client.post(f"/api/domains/{d['id']}/verify", headers=h).json()
+    assert r["verified"] is False
+    assert r["verify_error"] == "mismatch" and r["verify_found"] == ["sw-verify=old"]
+
+
 def test_domains_are_isolated_between_users(client):
     d = _add_domain(client, _auth(client))
     other = _auth(client)
@@ -82,9 +107,9 @@ def test_active_scan_requires_verified_domain(client, queued, monkeypatch):
     r = client.post("/api/scans", json={"domain_id": d["id"], "level": "standard"}, headers=h)
     assert r.status_code == 403 and not queued
 
-    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: False)
+    monkeypatch.setattr(domains, "lookup_txt_record", lambda name, value: domains.TxtCheck(domains.TXT_NOT_FOUND))
     assert client.post(f"/api/domains/{d['id']}/verify", headers=h).json()["verified"] is False
-    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: value == d["record_value"])
+    monkeypatch.setattr(domains, "lookup_txt_record", _txt_ok_if(d["record_value"]))
     assert client.post(f"/api/domains/{d['id']}/verify", headers=h).json()["verified"] is True
 
     r = client.post("/api/scans", json={"domain_id": d["id"], "level": "standard"}, headers=h)
@@ -94,31 +119,31 @@ def test_active_scan_requires_verified_domain(client, queued, monkeypatch):
 def test_deep_scan_requires_consent(client, queued, monkeypatch):
     h = _auth(client)
     d = _add_domain(client, h)
-    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: value == d["record_value"])
+    monkeypatch.setattr(domains, "lookup_txt_record", _txt_ok_if(d["record_value"]))
     assert client.post(f"/api/domains/{d['id']}/verify", headers=h).json()["verified"] is True
 
     # Verified but no consent -> refused.
     r = client.post("/api/scans", json={"domain_id": d["id"], "level": "deep"}, headers=h)
     assert r.status_code == 403 and not queued
 
-    # Verified + consent -> accepted, and the consent is written to the audit trail.
+    # Verified + consent -> accepted, and the consent is recorded in the audit trail.
     r = client.post("/api/scans", json={"domain_id": d["id"], "level": "deep", "consent": True}, headers=h)
     assert r.status_code == 202
     with SessionLocal() as db:
-        actions = {a.action for a in db.query(AuditLog).filter_by(scan_id=r.json()["id"])}
-    assert "scan.active_consent" in actions
+        log = db.query(AuditLog).filter_by(scan_id=r.json()["id"]).one()
+    assert (log.level, log.consent) == ("deep", True)
 
 
 def test_deep_scan_has_its_own_daily_quota(client, queued, monkeypatch):
     h = _auth(client)
     d = _add_domain(client, h)
-    monkeypatch.setattr(domains, "check_txt_record", lambda name, value: value == d["record_value"])
+    monkeypatch.setattr(domains, "lookup_txt_record", _txt_ok_if(d["record_value"]))
     client.post(f"/api/domains/{d['id']}/verify", headers=h)
     # Isolate the dedicated deep quota from the general concurrency/daily guards.
     monkeypatch.setattr(api.get_settings(), "deep_max_scans_per_day", 0)
 
     r = client.post("/api/scans", json={"domain_id": d["id"], "level": "deep", "consent": True}, headers=h)
-    assert r.status_code == 429 and "deep" in r.json()["detail"] and not queued
+    assert r.status_code == 429 and r.json()["detail"] == "daily scan quota reached" and not queued
 
 
 def test_raw_bbot_options_are_rejected(client):
@@ -173,10 +198,28 @@ def test_delete_account_removes_data_but_keeps_audit(client, queued):
     h = _auth(client)
     d = _add_domain(client, h)
     scan_id = client.post("/api/scans", json={"domain_id": d["id"]}, headers=h).json()["id"]
-    assert client.delete("/api/users/me", headers=h).status_code == 204
+    user_id = client.get("/api/users/me", headers=h).json()["id"]
+    wrong = client.request("DELETE", "/api/users/me", json={"password": "not my password"}, headers=h)
+    assert wrong.status_code == 403
+    r = client.request("DELETE", "/api/users/me", json={"password": PASSWORD}, headers=h)
+    assert r.status_code == 204
     assert client.get("/api/users/me", headers=h).status_code == 401
     with SessionLocal() as db:
         assert db.query(AuditLog).filter_by(scan_id=scan_id).count() == 1
+        assert db.query(AuditLog).filter_by(user_id=user_id, action="account.deleted").count() == 1
+        assert db.query(Scan).filter_by(user_id=user_id).count() == 0
+        assert db.query(Domain).filter_by(user_id=user_id).count() == 0
+
+
+def test_delete_account_refused_while_scan_runs(client, queued):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    scan_id = client.post("/api/scans", json={"domain_id": d["id"]}, headers=h).json()["id"]
+    with SessionLocal() as db:
+        db.get(Scan, scan_id).status = "running"
+        db.commit()
+    r = client.request("DELETE", "/api/users/me", json={"password": PASSWORD}, headers=h)
+    assert r.status_code == 409
 
 
 def test_queue_failure_does_not_consume_quota(client):
@@ -188,3 +231,107 @@ def test_queue_failure_does_not_consume_quota(client):
     d = _add_domain(client, h)
     assert client.post("/api/scans", json={"domain_id": d["id"]}, headers=h).status_code == 503
     assert client.get("/api/scans", headers=h).json() == []
+
+
+def test_advanced_scan_requires_ownership_then_consent_and_is_logged(client, queued, monkeypatch):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    # Unverified domain: blocked on ownership proof first.
+    assert client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced"},
+                       headers=h).status_code == 403 and not queued
+
+    monkeypatch.setattr(domains, "lookup_txt_record", _txt_ok_if(d["record_value"]))
+    assert client.post(f"/api/domains/{d['id']}/verify", headers=h).json()["verified"] is True
+
+    # Verified but no consent: still blocked.
+    assert client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced"},
+                       headers=h).status_code == 403 and not queued
+
+    # Verified + explicit consent: accepted and audited with the consent flag.
+    r = client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced", "consent": True},
+                    headers=h)
+    assert r.status_code == 202 and queued == [r.json()["id"]]
+    with SessionLocal() as db:
+        log = db.query(AuditLog).filter_by(scan_id=r.json()["id"]).one()
+    assert (log.level, log.consent) == ("advanced", True)
+
+
+def test_advanced_level_has_its_own_daily_quota(client, queued, monkeypatch):
+    from app.config import get_settings
+
+    h = _auth(client)
+    d = _add_domain(client, h)
+    monkeypatch.setattr(domains, "lookup_txt_record", lambda name, value: domains.TxtCheck(domains.TXT_OK))
+    client.post(f"/api/domains/{d['id']}/verify", headers=h)
+    monkeypatch.setattr(get_settings(), "advanced_max_scans_per_day", 0)
+    r = client.post("/api/scans", json={"domain_id": d["id"], "level": "advanced", "consent": True},
+                    headers=h)
+    assert r.status_code == 429 and r.json()["detail"] == "daily scan quota reached"
+
+
+def _admin(client) -> dict:
+    from app import cli
+
+    email = f"admin-{uuid.uuid4().hex[:8]}@example.fr"
+    r = client.post("/api/auth/register", json={"email": email, "password": "correct horse battery"})
+    assert cli.set_admin(email, True)
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def test_admin_routes_are_forbidden_to_regular_users(client):
+    h = _auth(client)
+    assert client.get("/api/users/me", headers=h).json()["is_admin"] is False
+    for path in ("/api/admin/stats", "/api/admin/domains", "/api/admin/scans", "/api/admin/audit"):
+        assert client.get(path, headers=h).status_code == 403
+    d = _add_domain(client, h)
+    r = client.post(f"/api/admin/domains/{d['id']}/verify", json={"reason": "self-service"}, headers=h)
+    assert r.status_code == 403
+    assert client.get("/api/domains", headers=h).json()[0]["verified"] is False
+
+
+def test_admin_manual_verification_unlocks_active_scan_and_is_audited(client, queued, monkeypatch):
+    owner = _auth(client)
+    d = _add_domain(client, owner, "manual-check.fr")
+    admin = _admin(client)
+
+    pending = client.get("/api/admin/domains", params={"q": "manual-check"}, headers=admin).json()
+    assert [x["id"] for x in pending] == [d["id"]] and pending[0]["owner_email"].endswith("@example.fr")
+    # A reason is mandatory.
+    assert client.post(f"/api/admin/domains/{d['id']}/verify", json={}, headers=admin).status_code == 422
+
+    r = client.post(f"/api/admin/domains/{d['id']}/verify",
+                    json={"reason": "ownership confirmed by registrar invoice"}, headers=admin)
+    assert r.status_code == 200
+    assert (r.json()["verified"], r.json()["verification_method"]) == (True, "manual")
+    assert client.post(f"/api/admin/domains/{d['id']}/verify", json={"reason": "again please"},
+                       headers=admin).status_code == 409
+
+    with SessionLocal() as db:
+        log = db.query(AuditLog).filter_by(action="domain.manual_verify", domain="manual-check.fr").one()
+    assert log.user_email.startswith("admin-") and log.source_ip
+    assert "registrar invoice" in log.details and "owner=" in log.details
+
+    # The owner can now run an active scan, and the worker accepts it without any DNS check.
+    r = client.post("/api/scans", json={"domain_id": d["id"], "level": "standard"}, headers=owner)
+    assert r.status_code == 202
+    monkeypatch.setattr(scans, "run_scan", lambda domain, level, verified:
+                        scans.ScanResult("sw_x", domain, scans.ScanLevel(level), 0 if verified else 1, []))
+    assert worker.execute_scan(r.json()["id"]) == "done"
+
+    # Revocation removes the verification and issues a fresh token.
+    r = client.post(f"/api/admin/domains/{d['id']}/revoke", headers=admin).json()
+    assert r["verified"] is False and r["record_value"] != d["record_value"]
+    r = client.post("/api/scans", json={"domain_id": d["id"], "level": "standard"}, headers=owner)
+    assert r.status_code == 403
+
+
+def test_admin_stats(client, queued):
+    h = _auth(client)
+    d = _add_domain(client, h)
+    client.post("/api/scans", json={"domain_id": d["id"]}, headers=h)
+    stats = client.get("/api/admin/stats", headers=_admin(client)).json()
+    assert stats["users"]["total"] >= 2 and stats["users"]["admins"] >= 1
+    assert stats["domains"]["pending"] >= 1
+    assert stats["scans"]["requested_24h"] >= 1 and stats["scans"]["by_level"]["passive"] >= 1
+    assert stats["scans"]["active"] >= 1
+    assert len(stats["scans"]["per_day"]) == 30 and stats["scans"]["per_day"][-1]["count"] >= 1

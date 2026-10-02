@@ -40,11 +40,21 @@ const MESSAGES = {
   "scan queue unavailable": "Le service de scan est indisponible. Réessayez plus tard.",
   "token expired, request a new one": "Le jeton a expiré : générez-en un nouveau.",
   "scan still running": "Le scan est encore en cours.",
+  "admin only": "Accès réservé aux administrateurs.",
+  "domain already verified": "Ce domaine est déjà vérifié.",
+  "domain not verified": "Ce domaine n'est pas vérifié.",
+  "email is not configured": "L'envoi d'e-mails n'est pas activé sur ce serveur.",
+  "invalid or expired reset link": "Ce lien est invalide, déjà utilisé ou expiré : faites une nouvelle demande.",
+  "wrong password": "Mot de passe incorrect.",
+  "wait for the running scan to finish": "Un scan est en cours : attendez sa fin avant de supprimer votre compte.",
 };
 
 export function errorMessage(error, fallback = "Une erreur est survenue.") {
   const detail = error?.response?.data?.detail;
-  if (typeof detail === "string") return MESSAGES[detail] ?? detail;
+  if (typeof detail === "string") {
+    if (detail.startsWith("smtp error: ")) return `Échec de l'envoi : ${detail.slice(12)}`;
+    return MESSAGES[detail] ?? detail;
+  }
   if (Array.isArray(detail)) return "Données invalides : vérifiez le formulaire.";
   return fallback;
 }

@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.models import User, utcnow
+from app.models import User, as_utc, utcnow
 
 JWT_ALGORITHM = "HS256"
 _bearer = HTTPBearer(auto_error=False)
@@ -64,4 +64,14 @@ def get_current_user(
     user = db.get(User, payload.get("sub"))
     if user is None:
         raise _unauthorized("unknown user")
+    # A password reset closes every session opened before it.
+    changed = as_utc(user.password_changed_at)
+    if changed is not None and payload.get("iat", 0) < int(changed.timestamp()):
+        raise _unauthorized("token expired")
+    return user
+
+
+def get_current_admin(user: User = Depends(get_current_user)) -> User:
+    if not user.is_admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="admin only")
     return user

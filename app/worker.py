@@ -11,10 +11,10 @@ from datetime import timedelta
 
 from sqlalchemy import delete, select
 
-from app import checks, scans
+from app import checks, mailer, scans
 from app.config import get_settings
 from app.db import SessionLocal, init_db
-from app.models import Domain, Scan, utcnow
+from app.models import Domain, PasswordResetToken, Scan, utcnow
 
 
 def execute_scan(scan_id: str) -> str:
@@ -54,16 +54,24 @@ def execute_scan(scan_id: str) -> str:
         scan.finished_at = utcnow()
         db.commit()
         status = scan.status
+        if scan.user.notify_scan_done:
+            mailer.send_scan_finished(scan.user.email, scan.id, scan.domain, scan.level, status)
 
     purge_expired()
     return status
 
 
 def purge_expired() -> int:
-    """Delete scan results older than RETENTION_DAYS (GDPR). Returns the number deleted."""
-    cutoff = utcnow() - timedelta(days=get_settings().retention_days)
+    """Delete scan results older than RETENTION_DAYS (GDPR). Returns the number deleted.
+
+    Also drops password reset tokens that expired more than a day ago.
+    """
+    now = utcnow()
+    cutoff = now - timedelta(days=get_settings().retention_days)
     with SessionLocal() as db:
         res = db.execute(delete(Scan).where(Scan.created_at < cutoff))
+        db.execute(delete(PasswordResetToken)
+                   .where(PasswordResetToken.expires_at < now - timedelta(days=1)))
         db.commit()
         return res.rowcount or 0
 

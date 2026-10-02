@@ -32,11 +32,21 @@ class User(Base):
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
     email: Mapped[str] = mapped_column(String(254), unique=True, index=True)
     password_hash: Mapped[str] = mapped_column(String(100))
+    # Admins can see platform stats and manually validate domain ownership.
+    # Granted only from the server CLI (python -m app.cli make-admin), never through the API.
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # E-mail when one of the user's scans finishes (only if SMTP is configured).
+    notify_scan_done: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Access tokens issued before this instant are rejected (set on password reset).
+    password_changed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     domains: Mapped[list[Domain]] = relationship(
         back_populates="user", cascade="all, delete-orphan")
     scans: Mapped[list[Scan]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    reset_tokens: Mapped[list[PasswordResetToken]] = relationship(
+        back_populates="user", cascade="all, delete-orphan")
 
 
 class Domain(Base):
@@ -51,6 +61,9 @@ class Domain(Base):
     token_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     verified: Mapped[bool] = mapped_column(Boolean, default=False)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # "dns" (TXT record checked) or "manual" (validated by an admin, see AuditLog).
+    verification_method: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    verified_by: Mapped[str | None] = mapped_column(String(32), nullable=True)  # admin user id
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     user: Mapped[User] = relationship(back_populates="domains")
@@ -74,8 +87,24 @@ class Scan(Base):
     user: Mapped[User] = relationship(back_populates="scans")
 
 
+class PasswordResetToken(Base):
+    """Single-use, expiring password reset token. Only its SHA-256 hash is stored."""
+
+    __tablename__ = "password_reset_tokens"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+    user: Mapped[User] = relationship(back_populates="reset_tokens")
+
+
 class AuditLog(Base):
-    """One row per scan request (CLAUDE.md rule 4).
+    """One row per scan request (CLAUDE.md rule 4), per admin action on a domain and per
+    sensitive account action (password reset, account deletion).
 
     Deliberately not a foreign key to users: the trail must survive account deletion.
     """
@@ -88,6 +117,31 @@ class AuditLog(Base):
     action: Mapped[str] = mapped_column(String(40))
     domain: Mapped[str] = mapped_column(String(253))
     level: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    # Explicit user consent recorded for aggressive levels (advanced brute-force).
+    consent: Mapped[bool] = mapped_column(Boolean, default=False)
     source_ip: Mapped[str | None] = mapped_column(String(45), nullable=True)
     scan_id: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Free-form context, e.g. the domain owner and the admin's reason for a manual validation.
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class SmtpSettings(Base):
+    """Outgoing e-mail configuration edited from the admin page (single row, id=1).
+
+    When this row exists it takes precedence over the SMTP_* environment variables.
+    The SMTP password / API key is stored encrypted (see app.crypto), never in clear.
+    """
+
+    __tablename__ = "smtp_settings"
+
+    id: Mapped[int] = mapped_column(primary_key=True, default=1)
+    host: Mapped[str] = mapped_column(String(253), default="")
+    port: Mapped[int] = mapped_column(default=587)
+    security: Mapped[str] = mapped_column(String(10), default="starttls")  # starttls|ssl|none
+    username: Mapped[str] = mapped_column(String(254), default="")
+    password_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
+    from_address: Mapped[str] = mapped_column(String(254), default="")
+    public_url: Mapped[str] = mapped_column(String(300), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_by: Mapped[str | None] = mapped_column(String(254), nullable=True)  # admin e-mail

@@ -24,13 +24,8 @@ from app.domains import normalize_domain
 class ScanLevel(str, Enum):
     PASSIVE = "passive"
     STANDARD = "standard"  # active — requires a verified domain (v0.3)
-    DEEP = "deep"          # active port scan + service fingerprinting — verified + consent
-
-
-# Levels that scan the target itself: a verified domain is mandatory (rule 1).
-ACTIVE_LEVELS = frozenset({ScanLevel.STANDARD, ScanLevel.DEEP})
-# Levels that require explicit, logged user consent on top of verification (rule 3).
-CONSENT_LEVELS = frozenset({ScanLevel.DEEP})
+    ADVANCED = "advanced"  # active + brute-force — verified domain AND explicit consent (v0.4)
+    DEEP = "deep"          # active port scan + service fingerprinting — verified AND consent
 
 
 # Server-side presets. NEVER build these from user input.
@@ -41,29 +36,58 @@ FORBIDDEN_FLAGS = ["loud", "invasive", "iis-shortnames", "web-heavy"]
 # modules flagged email-enum (sslcert, dnscaa, dnstlsrpt) are kept for their DNS results; the
 # e-mail addresses they emit are discarded in load_events().
 EXCLUDED_MODULES = ["hunterio"]
-# BBOT omits HTTP_RESPONSE from its output by default. We need it (headers only) to
-# derive security-header and advertised-version findings, so the active level overrides
+
+# BBOT omits HTTP_RESPONSE from its output by default. We need it (headers only) to derive
+# security-header and advertised-version findings, so every active level overrides
 # omit_event_types to keep HTTP_RESPONSE while still dropping the other noisy types.
 _OMIT_EVENT_TYPES = "omit_event_types=[RAW_TEXT,URL_UNVERIFIED,DNS_NAME_UNRESOLVED,FILESYSTEM,WEB_PARAMETER]"
 
-# The "deep" level adds a real port scan (masscan, via the portscan module) and service
-# fingerprinting (fingerprintx). masscan is "loud", so we cannot exclude the loud flag here;
-# instead we exclude it everywhere it matters and forbid the same aggressive flags as the
-# other levels (invasive auth brute-force, iis-shortnames/web-heavy, paramminer). The preset
-# stays server-side: the user never gets to pick modules.
-DEEP_FORBIDDEN_FLAGS = ["invasive", "iis-shortnames", "web-heavy", "web-paramminer"]
+# "advanced" adds surface-level brute-force on top of the standard web scan:
+#   - dnsbrute: subdomain name brute-force (needs massdns in the worker image)
+#   - webbrute: web directory brute-force (surface-level, 1000-word list)
+# It deliberately still excludes, via flags:
+#   - invasive: credential brute-force against live services (legba, medusa) — never run
+#   - iis-shortnames / web-heavy: IIS shortname brute-force (webbrute_shortnames) and other
+#     heavy web modules
+#   - web-paramminer: parameter brute-force (slow, noisy, low signal)
+# kitchen-sink / paramminer / raw modules stay impossible: users only pick a level.
+ADVANCED_BRUTE_MODULES = ["dnsbrute", "webbrute"]
+ADVANCED_FORBIDDEN_FLAGS = ["invasive", "iis-shortnames", "web-heavy", "web-paramminer"]
+
+# "deep" adds a real port scan (masscan, via the portscan module) and service fingerprinting
+# (fingerprintx) to find exposed services. masscan is "loud", so we cannot exclude the loud
+# flag here; instead we forbid the same aggressive flags as advanced. nuclei (active vuln
+# probing) stays excluded via the invasive flag. The preset stays server-side.
 DEEP_MODULES = ["portscan", "fingerprintx"]
+DEEP_FORBIDDEN_FLAGS = ["invasive", "iis-shortnames", "web-heavy", "web-paramminer"]
 
 LEVEL_ARGS: dict[ScanLevel, list[str]] = {
     ScanLevel.PASSIVE: ["-p", "subdomain-enum", "-rf", "passive", "-em", *EXCLUDED_MODULES],
     ScanLevel.STANDARD: ["-p", "subdomain-enum", "web", "-ef", *FORBIDDEN_FLAGS,
                          "-em", *EXCLUDED_MODULES, "-c", _OMIT_EVENT_TYPES],
+    ScanLevel.ADVANCED: ["-p", "subdomain-enum", "web", "-m", *ADVANCED_BRUTE_MODULES,
+                         "-ef", *ADVANCED_FORBIDDEN_FLAGS, "-em", *EXCLUDED_MODULES,
+                         "-c", _OMIT_EVENT_TYPES],
     ScanLevel.DEEP: ["-p", "subdomain-enum", "web", "-m", *DEEP_MODULES,
                      "-ef", *DEEP_FORBIDDEN_FLAGS, "-em", *EXCLUDED_MODULES,
                      "-c", _OMIT_EVENT_TYPES,
                      "-c", "modules.portscan.top_ports=100",
                      "-c", "modules.portscan.rate=300"],
 }
+
+# Levels that send active traffic to the target: a verified domain is mandatory.
+ACTIVE_LEVELS = frozenset({ScanLevel.STANDARD, ScanLevel.ADVANCED, ScanLevel.DEEP})
+# Levels aggressive enough to require explicit, logged user consent.
+CONSENT_LEVELS = frozenset({ScanLevel.ADVANCED, ScanLevel.DEEP})
+
+
+def timeout_for(level: ScanLevel) -> int:
+    settings = get_settings()
+    if level is ScanLevel.ADVANCED:
+        return settings.advanced_scan_timeout_seconds
+    if level is ScanLevel.DEEP:
+        return settings.deep_scan_timeout_seconds
+    return settings.scan_timeout_seconds
 
 # Personal data BBOT may emit: never stored, never shown in reports.
 PERSONAL_DATA_EVENTS = {"EMAIL_ADDRESS", "USERNAME", "PASSWORD", "HASHED_PASSWORD"}
@@ -96,7 +120,25 @@ def build_command(domain: str, level: ScanLevel, scan_id: str, output_dir: Path)
         "-o", str(output_dir),
         "-n", scan_id,
         "-y",  # non-interactive
+        # Never install dependencies at scan time: the worker runs unprivileged (no root, no
+        # sudo) and BBOT's installer would abort the scan. They are installed at image build
+        # time by install_deps() below.
+        "--no-deps",
     ]
+
+
+def install_deps_command(level: ScanLevel) -> list[str]:
+    """Dry run with no target: BBOT installs the level's module dependencies, scans nothing."""
+    return [get_settings().bbot_bin, *LEVEL_ARGS[level], "-y", "--dry-run"]
+
+
+def install_deps() -> int:
+    """Install BBOT dependencies for every level. Run at image build time, as the worker user."""
+    for level in ScanLevel:
+        rc = subprocess.run(install_deps_command(level), check=False).returncode
+        if rc != 0:
+            return rc
+    return 0
 
 
 def run_scan(raw_domain: str, level: str, domain_verified: bool) -> ScanResult:
@@ -112,13 +154,10 @@ def run_scan(raw_domain: str, level: str, domain_verified: bool) -> ScanResult:
     output_dir = settings.scans_dir
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Deep scans run longer (port scan + fingerprinting) but get a stricter dedicated cap.
-    timeout = (settings.deep_scan_timeout_seconds if level is ScanLevel.DEEP
-               else settings.scan_timeout_seconds)
     cmd = build_command(domain, level, scan_id, output_dir)
     try:
         proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout, check=False
+            cmd, capture_output=True, text=True, timeout=timeout_for(level), check=False
         )
     except subprocess.TimeoutExpired:
         shutil.rmtree(output_dir / scan_id, ignore_errors=True)
@@ -157,3 +196,11 @@ def load_events(path: Path) -> list[dict]:
                 event["data"] = {k: v for k, v in event["data"].items() if k in _HTTP_RESPONSE_KEEP}
             events.append(event)
     return events
+
+
+if __name__ == "__main__":
+    import sys
+
+    if sys.argv[1:] != ["install-deps"]:
+        sys.exit("usage: python -m app.scans install-deps")
+    sys.exit(install_deps())

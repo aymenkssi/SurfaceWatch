@@ -34,6 +34,12 @@ def test_passive_command_is_passive_only():
     assert "-rf" in cmd and cmd[cmd.index("-rf") + 1] == "passive"
 
 
+@pytest.mark.parametrize("level", list(ScanLevel))
+def test_scans_never_install_deps_at_runtime(level):
+    # The worker has no root/sudo: BBOT's runtime installer would abort the scan.
+    assert "--no-deps" in build_command("example.fr", level, "sw_test", Path("/tmp"))
+
+
 def test_active_scan_requires_verification():
     with pytest.raises(ScanNotAllowed):
         run_scan("example.fr", "standard", domain_verified=False)
@@ -109,6 +115,29 @@ def test_load_events_strips_http_response_body(tmp_path):
 def test_email_harvesting_module_is_excluded_at_every_level():
     for args in LEVEL_ARGS.values():
         assert "hunterio" in args[args.index("-em") + 1:]
+
+
+def test_advanced_level_enables_surface_bruteforce_only():
+    args = LEVEL_ARGS[ScanLevel.ADVANCED]
+    modules = args[args.index("-m") + 1:args.index("-ef")]
+    assert set(modules) == {"dnsbrute", "webbrute"}  # subdomain + web-directory brute-force
+    excluded = set(args[args.index("-ef") + 1:args.index("-em")])
+    # No credential brute-force (invasive), no shortname/paramminer noise.
+    assert {"invasive", "iis-shortnames", "web-heavy", "web-paramminer"} <= excluded
+
+
+def test_advanced_scan_requires_verification():
+    with pytest.raises(ScanNotAllowed):
+        run_scan("example.fr", "advanced", domain_verified=False)
+
+
+def test_advanced_level_uses_a_longer_timeout():
+    from app.config import get_settings
+    from app.scans import timeout_for
+
+    s = get_settings()
+    assert timeout_for(ScanLevel.ADVANCED) == s.advanced_scan_timeout_seconds
+    assert timeout_for(ScanLevel.PASSIVE) == s.scan_timeout_seconds
 
 
 def test_deep_level_enables_portscan_and_fingerprintx():
