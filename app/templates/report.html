@@ -25,7 +25,7 @@
     <div class="kpi"><b>{{ report.ip_count }}</b>adresses IP</div>
     <div class="kpi"><b>{{ report.urls|length }}</b>URL</div>
     <div class="kpi"><b>{{ report.services|length }}</b>services</div>
-    <div class="kpi"><b>{{ report.technologies|length }}</b>technologies</div>
+    <div class="kpi"><b>{{ report.components|length }}</b>composants</div>
     <div class="kpi"><b>{{ report.findings|length }}</b>findings</div>
   </div>
 
@@ -47,6 +47,20 @@
     <tr><td>{{ s.host }}</td><td>{{ s.port }}</td><td>{{ s.protocol or '—' }}</td></tr>
     {% endfor %}
   </table>
+  {% endif %}
+
+  {% if report.components %}
+  <h2>Composants &amp; versions</h2>
+  <table>
+    <tr><th>Hôte</th><th>Composant</th><th>Version</th><th>Source</th></tr>
+    {% for c in report.components %}
+    <tr><td>{{ c.host }}</td><td>{{ c.product }}</td><td>{{ c.version }}</td><td>{{ c.source }}</td></tr>
+    {% endfor %}
+  </table>
+  <p class="note" style="border:0;padding:0;margin-top:-.75rem">
+    Versions déduites de ce que les hôtes annoncent (en-têtes HTTP, bannières de service).
+    Les vulnérabilités correspondantes apparaissent dans les findings (CVE / CISA KEV).
+  </p>
   {% endif %}
 
   {% if report.technologies %}

@@ -1,5 +1,5 @@
-from app import scans
-from app.reports import build_report, render_html
+from app import checks, scans, vulns
+from app.reports import build_report, render_html, report_to_dict
 from app.scans import LEVEL_ARGS, ScanLevel, ScanNotAllowed, build_command, run_scan
 
 import pytest
@@ -158,6 +158,80 @@ def test_deep_level_is_active_and_consent_gated():
 def test_deep_scan_requires_verification():
     with pytest.raises(ScanNotAllowed):
         run_scan("example.fr", "deep", domain_verified=False)
+
+
+def test_component_versions_from_http_server_header():
+    events = [{
+        "type": "HTTP_RESPONSE",
+        "data": {"url": "https://www.example.fr/", "host": "www.example.fr",
+                 "header": {"server": "Apache/2.4.52 (Debian) OpenSSL/1.1.1n",
+                            "x_powered_by": "PHP/7.4.3"}},
+    }]
+    comps = {(c["product"], c["version"]) for c in checks.component_versions(events)}
+    assert ("Apache", "2.4.52") in comps
+    assert ("OpenSSL", "1.1.1n") in comps
+    assert ("PHP", "7.4.3") in comps
+
+
+def test_component_versions_from_ssh_banner():
+    events = [{"type": "PROTOCOL",
+               "data": {"host": "ssh.example.fr", "port": 22, "protocol": "SSH",
+                        "banner": "SSH-2.0-OpenSSH_8.9p1 Debian-3"}}]
+    comps = checks.component_versions(events)
+    assert {"host": "ssh.example.fr", "product": "OpenSSH",
+            "version": "8.9p1", "source": "banner"} in comps
+
+
+def test_cpe_for_maps_known_products_only():
+    assert vulns.cpe_for("OpenSSH", "8.9p1") == "cpe:2.3:a:openbsd:openssh:8.9:p1:*:*:*:*:*:*"
+    assert vulns.cpe_for("Apache", "2.4.52") == "cpe:2.3:a:apache:http_server:2.4.52:*:*:*:*:*:*:*"
+    assert vulns.cpe_for("SomeUnknownThing", "1.0") is None
+
+
+def test_assess_components_flags_cves_and_marks_kev():
+    components = [{"host": "ssh.example.fr", "product": "OpenSSH", "version": "8.9p1",
+                  "source": "banner"}]
+
+    def fake_nvd(cpe):
+        assert "openssh" in cpe
+        return [{"id": "CVE-2024-6387", "cvss": 8.1, "severity": "HIGH", "summary": "regreSSHion"},
+                {"id": "CVE-2023-0001", "cvss": 5.0, "severity": "MEDIUM", "summary": "x"}]
+
+    findings = vulns.assess_components(components, kev_ids={"CVE-2024-6387"}, nvd_lookup=fake_nvd)
+    assert len(findings) == 1
+    f = findings[0]
+    assert f["type"] == "VULNERABILITY" and f["host"] == "ssh.example.fr"
+    assert f["severity"] == "CRITICAL"  # a KEV hit escalates
+    assert f["kev"] is True
+    assert "CVE-2024-6387" in f["description"] and "CISA KEV" in f["description"]
+
+
+def test_assess_components_skips_unmapped_and_cve_free():
+    comps = [
+        {"host": "h", "product": "Mystery", "version": "1.0", "source": "http-header"},
+        {"host": "h", "product": "Apache", "version": "2.4.99", "source": "http-header"},
+    ]
+    findings = vulns.assess_components(comps, kev_ids=set(), nvd_lookup=lambda cpe: [])
+    assert findings == []
+
+
+def test_vulnerability_events_fold_into_report_findings():
+    events = [{"type": "VULNERABILITY",
+               "data": {"severity": "critical", "host": "ssh.example.fr",
+                        "description": "OpenSSH 8.9p1 : 1 CVE connue"}}]
+    report = build_report("example.fr", "deep", events)
+    assert any(f["type"] == "VULNERABILITY" and f["severity"] == "CRITICAL"
+               for f in report.findings)
+    assert report_to_dict(report)["summary"]["vulnerabilities"] == 1
+
+
+def test_report_exposes_components():
+    events = [{"type": "HTTP_RESPONSE",
+               "data": {"url": "https://x/", "host": "x", "header": {"server": "nginx/1.18.0"}}}]
+    report = build_report("example.fr", "standard", events)
+    assert {"host": "x", "product": "nginx", "version": "1.18.0", "source": "http-header"} \
+        in report.components
+    assert report_to_dict(report)["summary"]["components"] == 1
 
 
 def test_build_report_surfaces_services():

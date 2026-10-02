@@ -188,7 +188,8 @@ def test_worker_stores_events_and_report_is_served(client, queued, monkeypatch):
 
     report = client.get(f"/api/scans/{scan_id}/report", headers=h).json()
     assert report["summary"] == {"subdomains": 1, "ips": 1, "urls": 0, "findings": 1,
-                                 "technologies": 0, "services": 0}
+                                 "technologies": 0, "services": 0,
+                                 "components": 0, "vulnerabilities": 0}
     assert report["findings"][0]["severity"] == "HIGH"
     html = client.get(f"/api/scans/{scan_id}/report.html", headers=h)
     assert "Dangling CNAME" in html.text

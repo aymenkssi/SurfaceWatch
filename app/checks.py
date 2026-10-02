@@ -13,6 +13,7 @@ TXT lookups on the domain the user owns.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlparse
 
 import dns.exception
@@ -85,6 +86,73 @@ def advertised_technologies(events: list[dict]) -> list[dict]:
                 seen.add((host, value))
                 techs.append({"host": host, "technology": value})
     return techs
+
+
+# A "Product/Version" token as advertised in a Server / X-Powered-By header, e.g.
+# "Apache/2.4.52", "OpenSSL/1.1.1n", "PHP/7.4.3", "nginx/1.18.0". We require a slash
+# and at least a dotted version so free text in parentheses ("(Debian)") is ignored.
+_HEADER_VERSION = re.compile(r"([A-Za-z][\w.+\-]*?)/v?(\d+(?:\.\d+)+[\w.\-]*)")
+# OpenSSH as advertised in an SSH banner, e.g. "SSH-2.0-OpenSSH_8.9p1 Debian-3".
+_SSH_VERSION = re.compile(r"OpenSSH[_/](\d+(?:\.\d+)+[A-Za-z0-9]*)", re.IGNORECASE)
+
+
+def _clean_version(version: str) -> str:
+    return version.strip().rstrip(".,;:)")
+
+
+def component_versions(events: list[dict]) -> list[dict]:
+    """Software components and their versions, inferred passively from what the scan
+    already collected: HTTP Server / X-Powered-By headers and service banners.
+
+    Returns dicts {host, product, version, source}. This is advertised-version data:
+    it never probes the target, and a backported security patch can make a version
+    string look vulnerable when it is not — the vulnerability layer flags that caveat.
+    """
+    components: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+
+    def add(host: str, product: str, version: str, source: str) -> None:
+        product, version = product.strip(), _clean_version(version)
+        key = (host, product.lower(), version)
+        if host and product and version and key not in seen:
+            seen.add(key)
+            components.append({"host": host, "product": product,
+                               "version": version, "source": source})
+
+    # Web stack advertised in HTTP response headers (Apache, nginx, OpenSSL, PHP…).
+    for host, data in _http_responses(events).items():
+        headers = data.get("header") or {}
+        if not isinstance(headers, dict):
+            continue
+        for key in ("server", "x_powered_by"):
+            value = headers.get(key)
+            if not value:
+                continue
+            for match in _HEADER_VERSION.finditer(str(value)):
+                add(host, match.group(1), match.group(2), "http-header")
+
+    # Service banners (e.g. OpenSSH on port 22), surfaced by the port-scan level.
+    for ev in events:
+        etype, data = ev.get("type"), ev.get("data")
+        if etype == "PROTOCOL" and isinstance(data, dict):
+            host = str(data.get("host", ""))
+            blob = " ".join(str(data.get(k, "")) for k in ("banner", "version", "protocol"))
+            for match in _SSH_VERSION.finditer(blob):
+                add(host, "OpenSSH", match.group(1), "banner")
+        elif etype == "TECHNOLOGY" and isinstance(data, dict):
+            host = str(data.get("host", ""))
+            version = str(data.get("version", "")).strip()
+            name = str(data.get("technology", "")).strip()
+            if version:
+                add(host, name or "?", version, "technology")
+            elif name:
+                # Some BBOT TECHNOLOGY events fold the version into the name string.
+                match = _HEADER_VERSION.search(name)
+                if match:
+                    add(host, match.group(1), match.group(2), "technology")
+
+    components.sort(key=lambda c: (c["host"], c["product"].lower(), c["version"]))
+    return components
 
 
 def _txt_records(name: str, timeout: float = 5.0) -> list[str]:

@@ -27,6 +27,7 @@ class Report:
     findings: list[dict] = field(default_factory=list)
     technologies: list[dict] = field(default_factory=list)  # {host, technology}
     services: list[dict] = field(default_factory=list)  # {host, port, protocol}
+    components: list[dict] = field(default_factory=list)  # {host, product, version, source}
 
     @property
     def ip_count(self) -> int:
@@ -85,6 +86,10 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
     for tech in checks.advertised_technologies(events):
         add_tech(tech["host"], tech["technology"])
 
+    # Detected software versions (vulnerability verdicts are computed by the worker
+    # and arrive as VULNERABILITY events, already folded into `findings` above).
+    components = checks.component_versions(events)
+
     findings.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 99))
     return Report(
         domain=domain,
@@ -98,6 +103,7 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
                   for (h, p), proto in sorted(services.items(),
                                               key=lambda kv: (kv[0][0], int(kv[0][1])
                                                               if kv[0][1].isdigit() else 0))],
+        components=components,
     )
 
 
@@ -114,12 +120,15 @@ def report_to_dict(report: Report) -> dict:
             "findings": len(report.findings),
             "technologies": len(report.technologies),
             "services": len(report.services),
+            "components": len(report.components),
+            "vulnerabilities": sum(1 for f in report.findings if f["type"] == "VULNERABILITY"),
         },
         "subdomains": [{"host": h, "ips": sorted(ips)} for h, ips in report.subdomains.items()],
         "urls": sorted(report.urls),
         "findings": report.findings,
         "technologies": report.technologies,
         "services": report.services,
+        "components": report.components,
     }
 
 
