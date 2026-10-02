@@ -11,6 +11,11 @@ export const LEVELS = {
     label: "Standard",
     description: "Scan actif léger. Nécessite un domaine vérifié.",
   },
+  advanced: {
+    label: "Avancé",
+    description: "Scan actif + brute-force de surface (sous-domaines et répertoires web). Domaine vérifié + consentement requis.",
+    requiresConsent: true,
+  },
   deep: {
     label: "Approfondi",
     description: "Scan de ports et identification des services exposés. Domaine vérifié + consentement requis.",

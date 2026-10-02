@@ -104,7 +104,7 @@ export function DomainCard({ domain, onChange, onScan, scanBusy }) {
             const locked = level !== "passive" && !domain.verified;
             const run = () => {
               if (requiresConsent && !window.confirm(
-                `Le niveau « ${label} » lance un scan de ports actif vers ${domain.name}. ` +
+                `Le niveau « ${label} » lance un scan actif vers ${domain.name}. ` +
                 "Vous confirmez être autorisé à scanner ce domaine ?")) return;
               onScan(domain, level, !!requiresConsent);
             };
