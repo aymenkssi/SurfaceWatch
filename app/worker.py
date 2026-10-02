@@ -11,7 +11,7 @@ from datetime import timedelta
 
 from sqlalchemy import delete, select
 
-from app import checks, mailer, scans
+from app import checks, mailer, scans, vulns
 from app.config import get_settings
 from app.db import SessionLocal, init_db
 from app.models import Domain, PasswordResetToken, Scan, utcnow
@@ -48,6 +48,16 @@ def execute_scan(scan_id: str) -> str:
                     events.append({"type": finding["type"], "data": finding})
             except Exception:  # noqa: BLE001 - mail checks must never fail a scan
                 pass
+            # Vulnerability verdicts for the advertised component versions (CISA KEV +
+            # keyless NVD). Best-effort: a feed outage must never fail the scan.
+            if get_settings().vuln_lookup_enabled:
+                try:
+                    kev_ids = vulns.load_kev()
+                    components = checks.component_versions(events)
+                    for finding in vulns.assess_components(components, kev_ids=kev_ids):
+                        events.append({"type": finding["type"], "data": finding})
+                except Exception:  # noqa: BLE001 - vuln lookup must never fail a scan
+                    pass
             scan.events = events
             scan.error = result.error
             scan.status = "done" if result.returncode == 0 else "failed"

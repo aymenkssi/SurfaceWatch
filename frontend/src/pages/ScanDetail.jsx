@@ -37,12 +37,14 @@ function Report({ report }) {
   const { summary } = report;
   return (
     <div className="space-y-6">
-      <div className="grid gap-4 grid-cols-2 md:grid-cols-3 lg:grid-cols-6">
+      <div className="grid gap-4 grid-cols-2 md:grid-cols-4">
         <Kpi label="Sous-domaines" value={summary.subdomains} />
         <Kpi label="Adresses IP" value={summary.ips} />
         <Kpi label="URL" value={summary.urls} />
         <Kpi label="Services" value={summary.services ?? 0} />
+        <Kpi label="Composants" value={summary.components ?? 0} />
         <Kpi label="Technologies" value={summary.technologies ?? 0} />
+        <Kpi label="Vulnérabilités" value={summary.vulnerabilities ?? 0} />
         <Kpi label="Findings" value={summary.findings} />
       </div>
 
@@ -96,6 +98,39 @@ function Report({ report }) {
                 ))}
               </TableBody>
             </Table>
+          </CardContent>
+        </Card>
+      )}
+
+      {report.components?.length > 0 && (
+        <Card className="shadow-soft">
+          <CardHeader>
+            <CardTitle>Composants &amp; versions</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Hôte</TableHead><TableHead>Composant</TableHead>
+                  <TableHead>Version</TableHead><TableHead>Source</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {report.components.map((c, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="font-medium break-all">{c.host}</TableCell>
+                    <TableCell>{c.product}</TableCell>
+                    <TableCell className="font-mono text-sm">{c.version}</TableCell>
+                    <TableCell className="text-muted-foreground text-xs">{c.source}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <p className="text-xs text-muted-foreground">
+              Versions déduites de ce que les hôtes annoncent (en-têtes HTTP, bannières de
+              service). Les vulnérabilités correspondantes (CVE / CISA KEV) apparaissent dans
+              les findings ci-dessus. Un correctif rétroporté peut rendre un verdict inexact.
+            </p>
           </CardContent>
         </Card>
       )}

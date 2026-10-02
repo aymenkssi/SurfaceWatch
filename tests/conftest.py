@@ -6,3 +6,6 @@ _tmp = tempfile.mkdtemp(prefix="sw-tests-")
 os.environ["DATABASE_URL"] = f"sqlite:///{_tmp}/test.db"
 os.environ["SECRET_KEY"] = "test-secret-key-with-enough-length-for-hs256"
 os.environ["FRONTEND_DIST"] = f"{_tmp}/no-dist"
+# Keep the worker hermetic: never reach the live CISA KEV / NVD feeds during tests.
+# The vulnerability-inference logic is covered directly with injected lookups.
+os.environ["VULN_LOOKUP_ENABLED"] = "false"
