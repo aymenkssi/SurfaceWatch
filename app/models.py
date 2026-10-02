@@ -40,6 +40,10 @@ class User(Base):
     # Access tokens issued before this instant are rejected (set on password reset).
     password_changed_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True)
+    # When an admin last reset this user's daily scan quota: scans created at or before
+    # this instant no longer count toward the per-level daily limit.
+    scan_quota_reset_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
     domains: Mapped[list[Domain]] = relationship(

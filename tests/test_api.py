@@ -146,6 +146,35 @@ def test_deep_scan_has_its_own_daily_quota(client, queued, monkeypatch):
     assert r.status_code == 429 and r.json()["detail"] == "daily scan quota reached" and not queued
 
 
+def test_admin_reset_quota_frees_the_daily_limit(client, queued, monkeypatch):
+    email = f"{uuid.uuid4().hex[:8]}@example.fr"
+    r = client.post("/api/auth/register", json={"email": email, "password": "correct horse battery"})
+    h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    d = _add_domain(client, h)
+    # Isolate the daily quota from the one-at-a-time concurrency guard.
+    monkeypatch.setattr(api.get_settings(), "max_concurrent_scans_per_user", 10)
+    monkeypatch.setattr(api.get_settings(), "max_scans_per_day", 1)
+
+    assert client.post("/api/scans", json={"domain_id": d["id"]}, headers=h).status_code == 202
+    blocked = client.post("/api/scans", json={"domain_id": d["id"]}, headers=h)
+    assert blocked.status_code == 429 and blocked.json()["detail"] == "daily scan quota reached"
+
+    admin = _admin(client)
+    reset = client.post("/api/admin/users/reset-quota", json={"email": email}, headers=admin)
+    assert reset.status_code == 200 and reset.json()["email"] == email
+
+    # The quota is free again: earlier scans no longer count toward the limit.
+    assert client.post("/api/scans", json={"domain_id": d["id"]}, headers=h).status_code == 202
+    with SessionLocal() as db:
+        assert db.query(AuditLog).filter_by(action="user.quota_reset").count() == 1
+
+
+def test_admin_reset_quota_unknown_user_is_404(client):
+    admin = _admin(client)
+    r = client.post("/api/admin/users/reset-quota", json={"email": "nobody@example.fr"}, headers=admin)
+    assert r.status_code == 404
+
+
 def test_raw_bbot_options_are_rejected(client):
     h = _auth(client)
     d = _add_domain(client, h)
