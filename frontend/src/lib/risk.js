@@ -24,6 +24,57 @@ export function countByCategory(findings) {
   return counts;
 }
 
+// Rank hosts by their worst finding, then by how many findings they carry.
+// Mirrors Hexiosec's "top hosts at risk" view. Derived from the report JSON.
+export function topHosts(findings, limit = 10) {
+  const byHost = new Map();
+  for (const f of findings) {
+    const host = f.host || "—";
+    const e = byHost.get(host) || { host, total: 0, worst: 5, counts: {} };
+    e.total += 1;
+    e.worst = Math.min(e.worst, SEVERITY_SCORE[f.severity] ?? 5);
+    e.counts[f.severity] = (e.counts[f.severity] ?? 0) + 1;
+    byHost.set(host, e);
+  }
+  return [...byHost.values()]
+    .sort((a, b) => a.worst - b.worst || b.total - a.total)
+    .slice(0, limit);
+}
+
+// A short remediation recommendation for a finding, from its category/description.
+export function remediationFor(finding) {
+  const cat = categorize(finding);
+  const d = finding.description || "";
+  if (cat === "Vulnérabilités") {
+    return "Mettre à jour le composant vers une version corrigée (voir la CVE associée).";
+  }
+  if (cat === "Mail") {
+    return "Renforcer l'authentification e-mail : SPF, DKIM, DMARC (p=reject) et MTA-STS.";
+  }
+  if (cat === "Web") {
+    if (/clair|cleartext|non chiffr|http:\/\//i.test(d)) {
+      return "Forcer HTTPS et rediriger tout trafic en clair.";
+    }
+    return "Ajouter les en-têtes de sécurité manquants (HSTS, CSP, X-Content-Type-Options, X-Frame-Options).";
+  }
+  return "Vérifier l'exposition de ce service et restreindre l'accès s'il n'est pas nécessaire.";
+}
+
+// One remediation action per finding, worst-first. The id is stable across reloads so a
+// per-viewer "done" state can be kept in localStorage (see ScanDetail's ActionsCard).
+export function remediationActions(findings) {
+  return findings
+    .map((f) => ({
+      id: `${f.severity}::${f.host || "—"}::${f.description || ""}`,
+      host: f.host || "—",
+      severity: f.severity,
+      description: f.description || "",
+      category: categorize(f),
+      advice: remediationFor(f),
+    }))
+    .sort((a, b) => (SEVERITY_SCORE[a.severity] ?? 5) - (SEVERITY_SCORE[b.severity] ?? 5));
+}
+
 // A category's score is driven by its worst finding; overall is the worst category.
 export function healthScores(findings) {
   const worst = Object.fromEntries(CATEGORIES.map((c) => [c, 5]));
