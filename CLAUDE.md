@@ -99,6 +99,11 @@ docker compose up --build              # tout le stack
   `invasive`, `iis-shortnames`, `web-heavy`, `web-paramminer` (résolu vérifié sur BBOT 3.0.2 :
   modules chargés = `dnsbrute`, `webbrute` uniquement côté brute-force ; `legba`, `medusa`,
   `webbrute_shortnames`, `paramminer_*` bien exclus). Revérifier à chaque montée de version de BBOT.
+- Dépendances BBOT : installées **au build de l'image** (`python -m app.scans install-deps`, en
+  root avec `HOME=/home/sw`, + paquets apt des « core deps » BBOT) ; les scans tournent avec
+  `--no-deps`. Le worker n'est pas root et n'a pas `sudo` : sans ça, BBOT plante dans
+  `ensure_root` (`FileNotFoundError: 'sudo'`). `--no-deps` seul ne suffit pas (les core deps
+  sont vérifiées quand même). Toute modif d'un niveau impose de reconstruire l'image.
 - Le dossier de sortie BBOT d'un scan est supprimé dès que ses événements sont en base
   (rétention gérée par l'app, pas par `keep_scans`, qui ne concerne que `~/.bbot/scans`).
 - Tester d'abord BBOT sur un domaine qu'on possède, jamais sur un domaine tiers.

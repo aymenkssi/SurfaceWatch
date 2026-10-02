@@ -33,6 +33,12 @@ def test_passive_command_is_passive_only():
     assert "-rf" in cmd and cmd[cmd.index("-rf") + 1] == "passive"
 
 
+@pytest.mark.parametrize("level", list(ScanLevel))
+def test_scans_never_install_deps_at_runtime(level):
+    # The worker has no root/sudo: BBOT's runtime installer would abort the scan.
+    assert "--no-deps" in build_command("example.fr", level, "sw_test", Path("/tmp"))
+
+
 def test_active_scan_requires_verification():
     with pytest.raises(ScanNotAllowed):
         run_scan("example.fr", "standard", domain_verified=False)
