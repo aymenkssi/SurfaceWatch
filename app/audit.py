@@ -173,6 +173,24 @@ def weak_tls_finding(host: str, port: int, timeout: float) -> dict | None:
     return None
 
 
+def _cert_summary(cert: dict | None, host: str) -> dict | None:
+    """A compact certificate record {host, subject, issuer, not_after} from getpeercert()."""
+    if not isinstance(cert, dict):
+        return None
+
+    def _name(field) -> str:
+        # getpeercert subject/issuer are tuples of ((key, value),) RDNs.
+        flat = {k: v for rdn in (field or ()) for (k, v) in rdn}
+        return flat.get("commonName") or flat.get("organizationName") or ""
+
+    return {
+        "host": host,
+        "subject": _name(cert.get("subject")),
+        "issuer": _name(cert.get("issuer")),
+        "not_after": cert.get("notAfter", ""),
+    }
+
+
 def probe_endpoint(host: str, scheme: str, port: int, timeout: float,
                    warning_days: int, max_body: int = 40000) -> dict | None:
     """Open one bounded HTTP/HTTPS connection; return a result dict or None if unreachable.
@@ -184,6 +202,7 @@ def probe_endpoint(host: str, scheme: str, port: int, timeout: float,
     """
     url = f"{scheme}://{host}" + ("" if port in (80, 443) else f":{port}")
     findings: list[dict] = []
+    certificate: dict | None = None
     now = datetime.now(timezone.utc)
 
     def _fetch(context: ssl.SSLContext | None) -> tuple[int, dict, dict | None, tuple | None, str]:
@@ -216,6 +235,7 @@ def probe_endpoint(host: str, scheme: str, port: int, timeout: float,
         if scheme == "https":
             try:
                 status, headers, cert, cipher, body = _fetch(ssl.create_default_context())
+                certificate = _cert_summary(cert, host)
                 if isinstance(cert, dict) and cert.get("notAfter"):
                     f = cert_expiry_finding(host, cert["notAfter"], now, warning_days)
                     if f:
@@ -251,6 +271,7 @@ def probe_endpoint(host: str, scheme: str, port: int, timeout: float,
         "protocol": scheme.upper(),
         "body": body,
         "set_cookie": set_cookie,
+        "certificate": certificate,
         "findings": findings,
     }
 
@@ -297,6 +318,8 @@ def audit_endpoints(events: list[dict], domain: str, settings, *, probe=probe_en
         }})
         for finding in res.get("findings", []):
             new_events.append({"type": "FINDING", "data": finding})
+        if res.get("certificate"):
+            new_events.append({"type": "CERTIFICATE", "data": res["certificate"]})
         # Technology fingerprints from the headers/cookies/body we fetched.
         for item in tech.fingerprint(res["header"], res.get("body", ""), res.get("set_cookie", "")):
             new_events.append({"type": "TECHNOLOGY", "data": {
