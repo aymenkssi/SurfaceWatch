@@ -62,3 +62,20 @@ def test_build_report_surfaces_technologies_and_http_findings():
     names = {t["technology"] for t in report.technologies}
     assert {"nginx", "Apache/2.4.6"} <= names
     assert any("HSTS" in f["description"] for f in report.findings)
+
+
+def test_dns_hygiene_all_missing(monkeypatch):
+    monkeypatch.setattr(checks, "_resolve", lambda name, rtype, timeout=5.0: [])
+    monkeypatch.setattr(checks, "_txt_records", lambda name, timeout=5.0: [])
+    descs = [f["description"] for f in checks.dns_hygiene_findings("example.fr")]
+    assert any("DNSSEC" in d for d in descs)
+    assert any("CAA" in d for d in descs)
+    assert any("DKIM" in d for d in descs)
+
+
+def test_dns_hygiene_clean_when_present(monkeypatch):
+    monkeypatch.setattr(checks, "_resolve",
+                        lambda name, rtype, timeout=5.0: ["present"])  # DNSKEY + CAA exist
+    monkeypatch.setattr(checks, "_txt_records",
+                        lambda name, timeout=5.0: ["v=DKIM1; k=rsa; p=AAAA"])
+    assert checks.dns_hygiene_findings("example.fr") == []

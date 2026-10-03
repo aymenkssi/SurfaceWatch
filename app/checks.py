@@ -155,20 +155,54 @@ def component_versions(events: list[dict]) -> list[dict]:
     return components
 
 
-def _txt_records(name: str, timeout: float = 5.0) -> list[str]:
+def _resolve(name: str, rtype: str, timeout: float = 5.0) -> list:
     resolver = dns.resolver.Resolver()
     resolver.lifetime = timeout
     try:
-        answers = resolver.resolve(name, "TXT")
+        return list(resolver.resolve(name, rtype))
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers,
             dns.exception.Timeout, dns.exception.DNSException):
         return []
+
+
+def _txt_records(name: str, timeout: float = 5.0) -> list[str]:
     records = []
-    for rdata in answers:
+    for rdata in _resolve(name, "TXT", timeout):
         # A TXT record may be split into several quoted strings; join them.
         parts = [p.decode() if isinstance(p, bytes) else str(p) for p in rdata.strings]
         records.append("".join(parts))
     return records
+
+
+# Selectors to probe for a DKIM key; DKIM selectors are arbitrary, so a miss is only a
+# soft signal (the domain may use a custom one) — reported at most as LOW.
+_DKIM_SELECTORS = ("default", "google", "selector1", "selector2", "k1", "dkim", "mail", "s1")
+
+
+def dns_hygiene_findings(domain: str) -> list[dict]:
+    """Passive DNS-configuration checks (DNSSEC, CAA, DKIM) via public lookups."""
+    findings: list[dict] = []
+
+    if not _resolve(domain, "DNSKEY"):
+        findings.append({"type": "FINDING", "severity": "LOW", "host": domain,
+                         "description": "DNSSEC non activé : les réponses DNS ne sont pas signées."})
+
+    if not _resolve(domain, "CAA"):
+        findings.append({"type": "FINDING", "severity": "LOW", "host": domain,
+                         "description": "Aucun enregistrement CAA : aucune autorité de "
+                                        "certification n'est restreinte pour ce domaine."})
+
+    has_dkim = any(
+        any(tok in r.lower() for tok in ("v=dkim1", "k=rsa", "p="))
+        for selector in _DKIM_SELECTORS
+        for r in _txt_records(f"{selector}._domainkey.{domain}")
+    )
+    if not has_dkim:
+        findings.append({"type": "FINDING", "severity": "LOW", "host": domain,
+                         "description": "Aucun sélecteur DKIM courant trouvé (un sélecteur "
+                                        "personnalisé peut toutefois exister)."})
+
+    return findings
 
 
 def mail_config_findings(domain: str) -> list[dict]:

@@ -125,19 +125,84 @@ def _parse_cvss(cve: dict) -> tuple[float, str]:
     return 0.0, "INFO"
 
 
+def _version_key(version: str) -> tuple[int, ...]:
+    """Dotted version -> tuple of ints for comparison, ignoring any non-numeric suffix."""
+    parts: list[int] = []
+    for token in re.split(r"[.\-_]", version.strip()):
+        match = re.match(r"\d+", token)
+        if not match:
+            break
+        parts.append(int(match.group()))
+    return tuple(parts)
+
+
+def _in_range(version: str, match: dict) -> bool:
+    """Does ``version`` satisfy a cpeMatch's version bounds?"""
+    v = _version_key(version)
+    if not v:
+        return False
+    start_incl, start_excl = match.get("versionStartIncluding"), match.get("versionStartExcluding")
+    end_incl, end_excl = match.get("versionEndIncluding"), match.get("versionEndExcluding")
+    if start_incl and v < _version_key(start_incl):
+        return False
+    if start_excl and v <= _version_key(start_excl):
+        return False
+    if end_incl and v > _version_key(end_incl):
+        return False
+    if end_excl and v >= _version_key(end_excl):
+        return False
+    return True
+
+
+def cve_applies(cve: dict, vendor: str, product: str, version: str) -> bool:
+    """True only if the detected version is genuinely in scope for this CVE.
+
+    NVD's ``cpeName`` query also returns CVEs whose configuration lists the product with a
+    bare-wildcard version and no range — which would otherwise tag a 2026 release with a
+    2009 CVE. We keep a CVE only when a *vulnerable* cpeMatch for this vendor/product either
+    names our exact version, or carries an explicit version range our version falls inside.
+    A bare wildcard with no range is dropped.
+    """
+    target = _version_key(version)
+    for config in cve.get("configurations", []) or []:
+        for node in config.get("nodes", []) or []:
+            for match in node.get("cpeMatch", []) or []:
+                if not match.get("vulnerable"):
+                    continue
+                parts = str(match.get("criteria", "")).split(":")
+                if len(parts) < 6 or parts[3].lower() != vendor or parts[4].lower() != product:
+                    continue
+                crit_version = parts[5]
+                has_range = any(k in match for k in (
+                    "versionStartIncluding", "versionStartExcluding",
+                    "versionEndIncluding", "versionEndExcluding"))
+                if crit_version not in ("*", "-"):
+                    if _version_key(crit_version) == target:
+                        return True
+                elif has_range and _in_range(version, match):
+                    return True
+    return False
+
+
 def nvd_cves_for_cpe(cpe: str, *, http_get=_http_get_json) -> list[dict]:
-    """CVEs NVD maps to an exact CPE (product+version). Best-effort: [] on failure."""
+    """CVEs NVD maps to an exact CPE (product+version), filtered to those whose vulnerable
+    version range actually covers our version. Best-effort: [] on failure."""
     settings = get_settings()
     url = f"{settings.nvd_api_base}?cpeName={cpe}&resultsPerPage={settings.nvd_results_per_cpe}"
     try:
         payload = http_get(url, settings.vuln_http_timeout_seconds)
     except Exception:  # noqa: BLE001 - NVD is best-effort
         return []
+    parts = cpe.split(":")
+    vendor, product, version = (parts[3], parts[4], parts[5]) if len(parts) > 5 else ("", "", "")
     cves: list[dict] = []
     for item in payload.get("vulnerabilities", []):
         cve = item.get("cve") or {}
         cve_id = str(cve.get("id", "")).upper()
         if not cve_id:
+            continue
+        # Drop over-broad matches (wildcard CPE, no version range) that don't cover our version.
+        if not cve_applies(cve, vendor.lower(), product.lower(), version):
             continue
         descriptions = cve.get("descriptions") or []
         summary = next((d.get("value", "") for d in descriptions if d.get("lang") == "en"), "")

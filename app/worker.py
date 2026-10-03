@@ -53,11 +53,13 @@ def execute_scan(scan_id: str) -> str:
                     events.extend(audit.audit_endpoints(events, scan.domain, settings))
                 except Exception:  # noqa: BLE001 - the audit must never fail a scan
                     pass
-            # Passive e-mail authentication checks (public DNS on the scanned domain).
+            # Passive e-mail authentication + DNS hygiene checks (public DNS on the domain).
             try:
                 for finding in checks.mail_config_findings(scan.domain):
                     events.append({"type": finding["type"], "data": finding})
-            except Exception:  # noqa: BLE001 - mail checks must never fail a scan
+                for finding in checks.dns_hygiene_findings(scan.domain):
+                    events.append({"type": finding["type"], "data": finding})
+            except Exception:  # noqa: BLE001 - DNS checks must never fail a scan
                 pass
             # Vulnerability verdicts for the advertised component versions (CISA KEV +
             # keyless NVD). Best-effort: a feed outage must never fail the scan.

@@ -116,6 +116,15 @@
     <div class="sevcard sev-LOW"><div class="n">{{ sev.LOW }}</div><div class="lbl">Faible</div></div>
   </div>
 
+  {% if report.category_counts %}
+  <h2>Risques par catégorie</h2>
+  <div class="kpis">
+    {% for cat, n in report.category_counts.items() %}
+    <div class="kpi"><b>{{ n }}</b><span>{{ cat }}</span></div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if report.vulnerable_components %}
   <h2>Composants vulnérables</h2>
   <table>
@@ -139,12 +148,15 @@
 <div class="page">
   <h2>Findings</h2>
   {% if report.findings %}
+  {% for cat, items in report.findings_by_category %}
+  <h3>{{ cat }} ({{ items|length }})</h3>
   <table>
     <tr><th>Sévérité</th><th>Hôte</th><th>Description</th></tr>
-    {% for f in report.findings %}
+    {% for f in items %}
     <tr><td class="txt-{{ f.severity }}">{{ f.severity }}</td><td class="mono">{{ f.host }}</td><td>{{ f.description }}</td></tr>
     {% endfor %}
   </table>
+  {% endfor %}
   {% else %}<p class="muted">Aucun finding sur ce scan.</p>{% endif %}
 
   {% if report.components %}
