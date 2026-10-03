@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     scans_dir: Path = Path("./data/scans")
     bbot_bin: str = "bbot"
 
+    # Self-driven config audit: probe the web/TLS services the scan discovered, from our
+    # own infrastructure, to re-derive HTTP headers, advertised versions and certificate
+    # findings when BBOT's own web-probe phase yields nothing. This sends packets to the
+    # target, so the worker runs it ONLY for active levels on a verified domain. No
+    # third-party keys. Bounded by a per-connection timeout, a service cap and concurrency.
+    self_audit_enabled: bool = True
+    self_audit_max_services: int = 150
+    self_audit_timeout_seconds: float = 6.0
+    self_audit_concurrency: int = 16
+    self_audit_cert_expiry_warning_days: int = 30
+
     # Vulnerability inference (passive): map advertised versions to known CVEs via the
     # public CISA KEV feed and the keyless NVD API. All best-effort; disable to skip.
     vuln_lookup_enabled: bool = True

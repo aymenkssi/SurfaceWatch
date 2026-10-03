@@ -11,7 +11,7 @@ from datetime import timedelta
 
 from sqlalchemy import delete, select
 
-from app import checks, mailer, scans, vulns
+from app import audit, checks, mailer, scans, vulns
 from app.config import get_settings
 from app.db import SessionLocal, init_db
 from app.models import Domain, PasswordResetToken, Scan, utcnow
@@ -42,6 +42,17 @@ def execute_scan(scan_id: str) -> str:
             scan.status, scan.error = "failed", f"internal error: {type(exc).__name__}"
         else:
             events = list(result.events)
+            settings = get_settings()
+            # Self-driven web/TLS config audit over the discovered services. Sends packets
+            # to the target, so only for active levels on a verified domain. It synthesizes
+            # HTTP_RESPONSE / URL / PROTOCOL / FINDING events the checks below already read,
+            # filling the gap when BBOT's own web-probe phase produced nothing.
+            if (settings.self_audit_enabled and verified
+                    and scans.ScanLevel(scan.level) in scans.ACTIVE_LEVELS):
+                try:
+                    events.extend(audit.audit_endpoints(events, scan.domain, settings))
+                except Exception:  # noqa: BLE001 - the audit must never fail a scan
+                    pass
             # Passive e-mail authentication checks (public DNS on the scanned domain).
             try:
                 for finding in checks.mail_config_findings(scan.domain):
