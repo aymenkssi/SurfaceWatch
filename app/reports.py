@@ -55,6 +55,7 @@ class Report:
     technologies: list[dict] = field(default_factory=list)  # {host, technology}
     services: list[dict] = field(default_factory=list)  # {host, port, protocol}
     components: list[dict] = field(default_factory=list)  # {host, product, version, source, vuln?}
+    certificates: list[dict] = field(default_factory=list)  # {host, subject, issuer, not_after}
 
     @property
     def ip_count(self) -> int:
@@ -97,6 +98,7 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
     tech_seen: set[tuple[str, str]] = set()
     technologies: list[dict] = []
     services: dict[tuple[str, str], str] = {}  # (host, port) -> protocol
+    certificates: dict[str, dict] = {}  # host -> {subject, issuer, not_after}
     # Structured vulnerability verdicts (from VULNERABILITY events the worker appends),
     # keyed so we can attach them back to the matching detected component.
     vuln_by_component: dict[tuple[str, str, str], dict] = {}
@@ -132,6 +134,12 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
                         str(data.get("protocol", "")))
         elif etype == "TECHNOLOGY" and isinstance(data, dict):
             add_tech(str(data.get("host", "")), str(data.get("technology", "")))
+        elif etype == "CERTIFICATE" and isinstance(data, dict):
+            host = str(data.get("host", ""))
+            if host and host not in certificates:
+                certificates[host] = {"host": host, "subject": data.get("subject", ""),
+                                      "issuer": data.get("issuer", ""),
+                                      "not_after": data.get("not_after", "")}
         elif etype in {"FINDING", "VULNERABILITY"} and isinstance(data, dict):
             severity = (data.get("severity") or "INFO").upper()
             findings.append({
@@ -177,6 +185,7 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
                                               key=lambda kv: (kv[0][0], int(kv[0][1])
                                                               if kv[0][1].isdigit() else 0))],
         components=components,
+        certificates=sorted(certificates.values(), key=lambda c: c["host"]),
     )
 
 
@@ -194,6 +203,7 @@ def report_to_dict(report: Report) -> dict:
             "technologies": len(report.technologies),
             "services": len(report.services),
             "components": len(report.components),
+            "certificates": len(report.certificates),
             "vulnerabilities": sum(1 for f in report.findings if f["type"] == "VULNERABILITY"),
         },
         "severity_counts": report.severity_counts,
@@ -204,6 +214,7 @@ def report_to_dict(report: Report) -> dict:
         "technologies": report.technologies,
         "services": report.services,
         "components": report.components,
+        "certificates": report.certificates,
     }
 
 
