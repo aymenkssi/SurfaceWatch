@@ -244,3 +244,52 @@ def test_build_report_surfaces_services():
     by_host = {(s["host"], s["port"]): s["protocol"] for s in report.services}
     assert by_host[("mail.example.fr", 25)] == "SMTP"
     assert ("www.example.fr", 443) in by_host
+
+
+def test_nvd_version_range_filtering_drops_wildcard_false_positives():
+    # NVD payload: one CVE with a real range that covers 2.4.68, one ancient wildcard-only
+    # CVE that must be dropped, and one range that excludes 2.4.68.
+    payload = {"vulnerabilities": [
+        {"cve": {"id": "CVE-2026-0001",
+                 "configurations": [{"nodes": [{"cpeMatch": [
+                     {"vulnerable": True, "criteria": "cpe:2.3:a:apache:http_server:*:*:*:*:*:*:*:*",
+                      "versionStartIncluding": "2.4.0", "versionEndExcluding": "2.4.70"}]}]}],
+                 "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 7.5}, "baseSeverity": "HIGH"}]},
+                 "descriptions": [{"lang": "en", "value": "in range"}]}},
+        {"cve": {"id": "CVE-2007-4723",  # wildcard, no range -> false positive, must drop
+                 "configurations": [{"nodes": [{"cpeMatch": [
+                     {"vulnerable": True, "criteria": "cpe:2.3:a:apache:http_server:*:*:*:*:*:*:*:*"}]}]}],
+                 "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 5.0}, "baseSeverity": "MEDIUM"}]},
+                 "descriptions": [{"lang": "en", "value": "ancient"}]}},
+        {"cve": {"id": "CVE-2000-9999",  # range excludes 2.4.68
+                 "configurations": [{"nodes": [{"cpeMatch": [
+                     {"vulnerable": True, "criteria": "cpe:2.3:a:apache:http_server:*:*:*:*:*:*:*:*",
+                      "versionEndExcluding": "2.0.0"}]}]}],
+                 "metrics": {"cvssMetricV31": [{"cvssData": {"baseScore": 9.0}, "baseSeverity": "CRITICAL"}]},
+                 "descriptions": [{"lang": "en", "value": "too old"}]}},
+    ]}
+    cpe = vulns.cpe_for("Apache", "2.4.68")
+    cves = vulns.nvd_cves_for_cpe(cpe, http_get=lambda url, timeout: payload)
+    ids = {c["id"] for c in cves}
+    assert ids == {"CVE-2026-0001"}
+
+
+def test_cve_applies_exact_version_match():
+    cve = {"configurations": [{"nodes": [{"cpeMatch": [
+        {"vulnerable": True, "criteria": "cpe:2.3:a:f5:nginx:1.24.0:*:*:*:*:*:*:*"}]}]}]}
+    assert vulns.cve_applies(cve, "f5", "nginx", "1.24.0") is True
+    assert vulns.cve_applies(cve, "f5", "nginx", "1.22.0") is False
+
+
+def test_report_findings_grouped_by_category():
+    events = [
+        {"type": "FINDING", "data": {"severity": "HIGH", "host": "h", "description": "Certificat TLS expiré."}},
+        {"type": "FINDING", "data": {"severity": "LOW", "host": "h", "description": "Aucun enregistrement CAA"}},
+        {"type": "FINDING", "data": {"severity": "MEDIUM", "host": "h", "description": "En-tête HSTS absent"}},
+        {"type": "FINDING", "data": {"severity": "MEDIUM", "host": "d", "description": "Aucun enregistrement DMARC"}},
+    ]
+    report = build_report("example.fr", "deep", events)
+    cats = dict(report.findings_by_category)
+    assert "TLS / Certificats" in cats and "DNS" in cats
+    assert "En-têtes & web" in cats and "Mail" in cats
+    assert report.category_counts["TLS / Certificats"] == 1

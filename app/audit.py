@@ -24,10 +24,13 @@ from __future__ import annotations
 
 import http.client
 import ipaddress
+import re
 import socket
 import ssl
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+
+from app import tech
 
 # Web service ports we probe. Everything else a port scan finds (SSH, SMTP, DNS, app
 # ports) is left alone: this audit is about web and TLS configuration, like Hexiosec's.
@@ -36,6 +39,11 @@ HTTP_PORTS = {80, 8080, 8880, 2052, 2082, 2086, 2095}
 WEB_PORTS = HTTPS_PORTS | HTTP_PORTS
 
 _USER_AGENT = "SurfaceAttackWatch/1.0 (+config-audit)"
+
+# Cipher tokens we treat as weak if negotiated.
+_WEAK_CIPHER = re.compile(r"\b(RC4|3DES|DES|NULL|EXPORT|MD5|ANON)\b", re.I)
+# TLS/SSL protocol versions we flag as obsolete when a server still accepts them.
+_WEAK_TLS_VERSIONS = {"SSLv3", "TLSv1", "TLSv1.1"}
 
 
 def _norm_host(host: str) -> str:
@@ -126,19 +134,59 @@ def cert_expiry_finding(host: str, not_after: str, now: datetime, warning_days: 
 
 # --- Network probe -------------------------------------------------------------------------
 
+def cipher_finding(host: str, cipher: tuple | None) -> dict | None:
+    """Flag a negotiated cipher that is weak (RC4/3DES/DES/NULL/EXPORT/MD5, or < 128-bit)."""
+    if not cipher:
+        return None
+    name = str(cipher[0]) if len(cipher) > 0 else ""
+    bits = cipher[2] if len(cipher) > 2 and isinstance(cipher[2], int) else None
+    if _WEAK_CIPHER.search(name) or (bits is not None and bits < 128):
+        return {"type": "FINDING", "severity": "MEDIUM", "host": host,
+                "description": f"Chiffrement TLS faible négocié ({name})."}
+    return None
+
+
+def weak_tls_finding(host: str, port: int, timeout: float) -> dict | None:
+    """Flag a server that still accepts an obsolete TLS/SSL protocol (<= TLS 1.1).
+
+    Attempts one handshake capped at TLS 1.1. If it succeeds the server supports an
+    obsolete protocol. Best-effort: if the local OpenSSL cannot offer those versions,
+    or the handshake fails, we report nothing.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    try:
+        context.maximum_version = ssl.TLSVersion.TLSv1_1
+        context.minimum_version = ssl.TLSVersion.TLSv1
+    except (ValueError, AttributeError, OSError):
+        return None
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            with context.wrap_socket(sock, server_hostname=host) as ssock:
+                version = ssock.version()
+    except (OSError, ssl.SSLError, ValueError):
+        return None
+    if version in _WEAK_TLS_VERSIONS:
+        return {"type": "FINDING", "severity": "MEDIUM", "host": host,
+                "description": f"Protocole TLS obsolète accepté ({version})."}
+    return None
+
+
 def probe_endpoint(host: str, scheme: str, port: int, timeout: float,
-                   warning_days: int) -> dict | None:
+                   warning_days: int, max_body: int = 40000) -> dict | None:
     """Open one bounded HTTP/HTTPS connection; return a result dict or None if unreachable.
 
-    Result: {url, host, status_code, header, protocol, findings}. For HTTPS the TLS
-    certificate is verified; a verification failure becomes a FINDING and headers are
-    still fetched over a non-verifying connection so the header/version checks can run.
+    Result: {url, host, status_code, header, protocol, body, set_cookie, findings}. For
+    HTTPS the TLS certificate is verified (a failure becomes a FINDING), the negotiated
+    cipher and obsolete-protocol support are audited, and headers/body are still fetched
+    over a non-verifying connection so the header/version/tech checks have input.
     """
     url = f"{scheme}://{host}" + ("" if port in (80, 443) else f":{port}")
     findings: list[dict] = []
     now = datetime.now(timezone.utc)
 
-    def _fetch(context: ssl.SSLContext | None) -> tuple[int, dict, dict | None]:
+    def _fetch(context: ssl.SSLContext | None) -> tuple[int, dict, dict | None, tuple | None, str]:
         if scheme == "https":
             conn = http.client.HTTPSConnection(host, port, timeout=timeout, context=context)
         else:
@@ -146,22 +194,28 @@ def probe_endpoint(host: str, scheme: str, port: int, timeout: float,
         try:
             conn.request("GET", "/", headers={"User-Agent": _USER_AGENT, "Accept": "*/*"})
             resp = conn.getresponse()
-            headers = {_norm_header(k): v for k, v in resp.getheaders()}
-            cert = None
+            headers: dict[str, str] = {}
+            for k, v in resp.getheaders():
+                nk = _norm_header(k)
+                headers[nk] = f"{headers[nk]}, {v}" if nk in headers else v
+            cert, cipher = None, None
             if scheme == "https" and conn.sock is not None:
                 try:
-                    cert = conn.sock.getpeercert()
-                except (ValueError, OSError):
-                    cert = None
-            resp.read(2048)  # drain a little; body is never stored
-            return resp.status, headers, cert
+                    cert, cipher = conn.sock.getpeercert(), conn.sock.cipher()
+                except (ValueError, OSError, AttributeError):
+                    cert = cipher = None
+            try:
+                body = resp.read(max_body).decode("utf-8", "replace")
+            except (OSError, http.client.HTTPException):
+                body = ""
+            return resp.status, headers, cert, cipher, body
         finally:
             conn.close()
 
     try:
         if scheme == "https":
             try:
-                status, headers, cert = _fetch(ssl.create_default_context())
+                status, headers, cert, cipher, body = _fetch(ssl.create_default_context())
                 if isinstance(cert, dict) and cert.get("notAfter"):
                     f = cert_expiry_finding(host, cert["notAfter"], now, warning_days)
                     if f:
@@ -171,22 +225,32 @@ def probe_endpoint(host: str, scheme: str, port: int, timeout: float,
                 if sev_desc:
                     findings.append({"type": "FINDING", "severity": sev_desc[0],
                                      "host": host, "description": sev_desc[1]})
-                # Still collect headers so the header/version checks have input.
+                # Still collect headers/body so the header/version/tech checks have input.
                 unverified = ssl.create_default_context()
                 unverified.check_hostname = False
                 unverified.verify_mode = ssl.CERT_NONE
-                status, headers, _ = _fetch(unverified)
+                status, headers, _, cipher, body = _fetch(unverified)
+            cf = cipher_finding(host, cipher)
+            if cf:
+                findings.append(cf)
+            wf = weak_tls_finding(host, port, timeout)
+            if wf:
+                findings.append(wf)
         else:
-            status, headers, _ = _fetch(None)
+            status, headers, _, _, body = _fetch(None)
     except (OSError, http.client.HTTPException, ssl.SSLError, ValueError):
         return None
 
+    # A header value may be a comma-joined list; Set-Cookie is the one we fingerprint on.
+    set_cookie = headers.get("set_cookie", "")
     return {
         "url": url,
         "host": host,
         "status_code": status,
         "header": headers,
         "protocol": scheme.upper(),
+        "body": body,
+        "set_cookie": set_cookie,
         "findings": findings,
     }
 
@@ -206,11 +270,12 @@ def audit_endpoints(events: list[dict], domain: str, settings, *, probe=probe_en
 
     timeout = settings.self_audit_timeout_seconds
     warning_days = settings.self_audit_cert_expiry_warning_days
+    max_body = settings.self_audit_max_body_bytes
     workers = max(1, min(settings.self_audit_concurrency, len(endpoints)))
 
     results: list[dict] = []
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = [pool.submit(probe, host, scheme, port, timeout, warning_days)
+        futures = [pool.submit(probe, host, scheme, port, timeout, warning_days, max_body)
                    for host, scheme, port in endpoints]
         for fut in futures:
             try:
@@ -232,6 +297,12 @@ def audit_endpoints(events: list[dict], domain: str, settings, *, probe=probe_en
         }})
         for finding in res.get("findings", []):
             new_events.append({"type": "FINDING", "data": finding})
+        # Technology fingerprints from the headers/cookies/body we fetched.
+        for item in tech.fingerprint(res["header"], res.get("body", ""), res.get("set_cookie", "")):
+            new_events.append({"type": "TECHNOLOGY", "data": {
+                "host": res["host"], "technology": item["technology"],
+                "version": item.get("version", ""),
+            }})
     return new_events
 
 

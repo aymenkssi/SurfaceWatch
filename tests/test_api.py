@@ -263,8 +263,9 @@ def test_worker_stores_events_and_report_is_served(client, queued, monkeypatch):
         return scans.ScanResult("sw_x", domain, scans.ScanLevel(level), 0, SAMPLE_EVENTS)
 
     monkeypatch.setattr(scans, "run_scan", fake_run_scan)
-    # Keep the suite hermetic: no live DNS for the passive mail checks.
+    # Keep the suite hermetic: no live DNS for the passive mail / DNS-hygiene checks.
     monkeypatch.setattr(worker.checks, "mail_config_findings", lambda domain: [])
+    monkeypatch.setattr(worker.checks, "dns_hygiene_findings", lambda domain: [])
     assert worker.execute_scan(scan_id) == "done"
     assert calls == [("example.fr", "passive", False)]
 

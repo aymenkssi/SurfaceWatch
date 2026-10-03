@@ -51,6 +51,8 @@ class Settings(BaseSettings):
     self_audit_timeout_seconds: float = 6.0
     self_audit_concurrency: int = 16
     self_audit_cert_expiry_warning_days: int = 30
+    # How much of each page body to read for technology fingerprinting (never stored).
+    self_audit_max_body_bytes: int = 40000
 
     # Vulnerability inference (passive): map advertised versions to known CVEs via the
     # public CISA KEV feed and the keyless NVD API. All best-effort; disable to skip.

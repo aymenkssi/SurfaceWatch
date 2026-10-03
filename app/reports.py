@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -16,6 +17,31 @@ TEMPLATES_DIR = Path(__file__).parent / "templates"
 _env = Environment(loader=FileSystemLoader(TEMPLATES_DIR), autoescape=select_autoescape())
 
 SEVERITY_ORDER = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+
+# Category buckets for grouping the report, in display order. A finding is placed by its
+# type and description (the checks emit French descriptions).
+CATEGORIES = ["Vulnérabilités", "TLS / Certificats", "En-têtes & web", "Mail", "DNS", "Réseau"]
+_TLS_RE = re.compile(r"\bTLS\b|certificat|chiffrement", re.I)
+_MAIL_RE = re.compile(r"\bSPF\b|DMARC|DKIM|MTA-STS|e-mail|SMTP", re.I)
+_DNS_RE = re.compile(r"DNSSEC|\bCAA\b", re.I)
+_WEB_RE = re.compile(r"en-tête|HSTS|CSP|clair|clickjacking|Referrer|Permissions|"
+                     r"X-Content|X-Frame|cookie|HTTP", re.I)
+
+
+def categorize(finding: dict) -> str:
+    """Bucket a finding into one of CATEGORIES for the grouped report view."""
+    if finding.get("type") == "VULNERABILITY":
+        return "Vulnérabilités"
+    desc = finding.get("description", "") or ""
+    if _TLS_RE.search(desc):
+        return "TLS / Certificats"
+    if _DNS_RE.search(desc):
+        return "DNS"
+    if _MAIL_RE.search(desc):
+        return "Mail"
+    if _WEB_RE.search(desc):
+        return "En-têtes & web"
+    return "Réseau"
 
 
 @dataclass
@@ -45,6 +71,23 @@ class Report:
         order = SEVERITY_ORDER
         vulns = [c for c in self.components if c.get("vuln")]
         return sorted(vulns, key=lambda c: order.get(c["vuln"]["severity"], 99))
+
+    @property
+    def category_counts(self) -> dict[str, int]:
+        """Number of findings per category, only for categories that have any."""
+        counts = Counter(f.get("category", "Réseau") for f in self.findings)
+        return {cat: counts[cat] for cat in CATEGORIES if counts[cat]}
+
+    @property
+    def findings_by_category(self) -> list[tuple[str, list[dict]]]:
+        """Findings grouped by category (display order), each group severity-sorted."""
+        groups: list[tuple[str, list[dict]]] = []
+        for cat in CATEGORIES:
+            items = [f for f in self.findings if f.get("category") == cat]
+            if items:
+                items.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 99))
+                groups.append((cat, items))
+        return groups
 
 
 def build_report(domain: str, level: str, events: list[dict]) -> Report:
@@ -118,6 +161,8 @@ def build_report(domain: str, level: str, events: list[dict]) -> Report:
         if vuln:
             comp["vuln"] = vuln
 
+    for finding in findings:
+        finding["category"] = categorize(finding)
     findings.sort(key=lambda f: SEVERITY_ORDER.get(f["severity"], 99))
     return Report(
         domain=domain,
@@ -152,6 +197,7 @@ def report_to_dict(report: Report) -> dict:
             "vulnerabilities": sum(1 for f in report.findings if f["type"] == "VULNERABILITY"),
         },
         "severity_counts": report.severity_counts,
+        "category_counts": report.category_counts,
         "subdomains": [{"host": h, "ips": sorted(ips)} for h, ips in report.subdomains.items()],
         "urls": sorted(report.urls),
         "findings": report.findings,

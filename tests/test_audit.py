@@ -63,12 +63,13 @@ def test_audit_endpoints_synthesizes_events_with_injected_probe():
         {"type": "OPEN_TCP_PORT", "data": "shop.scc.com:80"},
     ]
 
-    def fake_probe(host, scheme, port, timeout, warning_days):
+    def fake_probe(host, scheme, port, timeout, warning_days, max_body=40000):
         if host == "www.scc.com":
             return {
                 "url": "https://www.scc.com", "host": host, "status_code": 200,
                 "header": {"server": "Apache/2.4.52"},  # no HSTS/CSP -> header findings
-                "protocol": "HTTPS",
+                "protocol": "HTTPS", "body": "<html>/wp-content/ jquery-3.6.0.min.js</html>",
+                "set_cookie": "PHPSESSID=abc; path=/",
                 "findings": [{"type": "FINDING", "severity": "HIGH", "host": host,
                               "description": "Certificat TLS expiré."}],
             }
@@ -78,6 +79,7 @@ def test_audit_endpoints_synthesizes_events_with_injected_probe():
     kinds = [e["type"] for e in new]
     assert kinds.count("URL") == 1 and kinds.count("HTTP_RESPONSE") == 1
     assert kinds.count("PROTOCOL") == 1 and kinds.count("FINDING") == 1
+    assert kinds.count("TECHNOLOGY") >= 2  # WordPress, jQuery, PHP fingerprinted
 
     # The synthesized events drive the existing downstream pipeline end to end.
     report = reports.build_report("scc.com", "deep", events + new)
@@ -88,6 +90,8 @@ def test_audit_endpoints_synthesizes_events_with_injected_probe():
     assert any(c["product"] == "Apache" and c["version"] == "2.4.52"
                for c in report.components)  # version detection ran on our header
     assert any(s["protocol"] == "HTTPS" for s in report.services)  # service now named
+    techs = {t["technology"] for t in report.technologies}
+    assert any("WordPress" in t for t in techs) and any("jQuery" in t for t in techs)
 
 
 def test_audit_endpoints_empty_when_no_web_services():
@@ -110,7 +114,10 @@ class _FakeHTTPS:
     peercert = {}
     def __init__(self, host, port, timeout=None, context=None):
         self.host, self.context = host, context
-        self.sock = type("S", (), {"getpeercert": lambda self_: _FakeHTTPS.peercert})()
+        self.sock = type("S", (), {
+            "getpeercert": lambda self_: _FakeHTTPS.peercert,
+            "cipher": lambda self_: ("ECDHE-RSA-AES256-GCM-SHA384", "TLSv1.3", 256),
+        })()
     def request(self, *a, **k):
         # A strict (verifying) context fails when the fake cert is marked expired.
         if self.context and self.context.verify_mode != ssl.CERT_NONE \
@@ -126,6 +133,7 @@ def test_probe_endpoint_https_happy_path(monkeypatch):
     not_after = (datetime.now(timezone.utc) + timedelta(days=5)).strftime("%b %d %H:%M:%S %Y GMT")
     _FakeHTTPS.peercert = {"notAfter": not_after}
     monkeypatch.setattr(http.client, "HTTPSConnection", _FakeHTTPS)
+    monkeypatch.setattr(audit, "weak_tls_finding", lambda *a, **k: None)  # no real socket
 
     res = audit.probe_endpoint("www.scc.com", "https", 443, timeout=1, warning_days=30)
     assert res["url"] == "https://www.scc.com" and res["status_code"] == 200
@@ -138,8 +146,32 @@ def test_probe_endpoint_https_happy_path(monkeypatch):
 def test_probe_endpoint_https_cert_error_still_gets_headers(monkeypatch):
     _FakeHTTPS.peercert = {"_expired": True}
     monkeypatch.setattr(http.client, "HTTPSConnection", _FakeHTTPS)
+    monkeypatch.setattr(audit, "weak_tls_finding", lambda *a, **k: None)  # no real socket
 
     res = audit.probe_endpoint("bad.scc.com", "https", 443, timeout=1, warning_days=30)
     assert res is not None
     assert any(f["severity"] == "HIGH" and "expiré" in f["description"] for f in res["findings"])
     assert res["header"]["server"] == "nginx/1.18.0"  # fetched over the non-verifying retry
+
+
+def test_tech_fingerprint_headers_cookies_body():
+    from app import tech
+    found = tech.fingerprint(
+        {"x-powered-by": "Express", "server": "cloudflare"},
+        "<html><script src='/wp-includes/js/jquery/jquery-3.6.0.min.js'></script>"
+        "<meta name='generator' content='WordPress 6.4.2'></html>",
+        "wordpress_logged_in=1; PHPSESSID=x",
+    )
+    names = {f["name"] for f in found}
+    assert {"Express", "Cloudflare", "WordPress", "jQuery", "PHP"} <= names
+    jq = next(f for f in found if f["name"] == "jQuery")
+    assert jq["version"] == "3.6.0"
+    wp = next(f for f in found if f["name"] == "WordPress")
+    assert wp.get("version") == "6.4.2"
+
+
+def test_cipher_finding_flags_weak_only():
+    assert audit.cipher_finding("h", ("ECDHE-RSA-RC4-SHA", "TLSv1.2", 128))["severity"] == "MEDIUM"
+    assert audit.cipher_finding("h", ("DES-CBC3-SHA", "TLSv1.0", 112))["severity"] == "MEDIUM"  # <128
+    assert audit.cipher_finding("h", ("ECDHE-RSA-AES256-GCM-SHA384", "TLSv1.3", 256)) is None
+    assert audit.cipher_finding("h", None) is None
